@@ -7,20 +7,13 @@ use fancy_regex::Regex;
 use reqwest::{blocking::Response, header::{HeaderMap, HeaderName, HeaderValue}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs::File, io, str::FromStr};
+use std::{fs, fs::File, io, str::FromStr};
 use std::io::prelude::*;
 use std::thread;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use tui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    widgets::{
-        Block, BorderType, Borders,Paragraph,
-    },
-    Terminal,
-};
+use tui::{Terminal, backend::CrosstermBackend, layout::{Alignment, Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Span, Spans}, widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph}};
+
 
 enum Event<I> {
     Input(I),
@@ -46,6 +39,40 @@ struct UserInput {
     active_menu_item: MenuItem
 }
 
+impl From<CRequest> for UserInput {
+    fn from(c_req : CRequest) -> Self {
+        UserInput {
+            url: c_req.url,
+            query: c_req.query,
+            payload: c_req.payload,
+            headers: c_req.headers,
+            method: c_req.method,
+            active_menu_item: MenuItem::BaseUrl
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct CRequest {
+    method: HttpMethod,
+    url: String,
+    query: String,
+    payload: String,
+    headers: String,
+}
+
+impl Default for CRequest {
+    fn default() -> Self {
+        CRequest {
+            method: HttpMethod::GET,
+            url: String::from("http://localhost:3000/rust"),
+            query: String::new(),
+            payload: String::new(),
+            headers: String::new(),
+        }
+    }
+}
+
 struct AppOutput {
     response_headers: String,
     response_payload: String
@@ -67,6 +94,7 @@ impl UserInput {
             MenuItem::Query => &mut self.query,
             MenuItem::Payload => &mut self.payload,
             MenuItem::Headers => &mut self.headers,
+            _=> panic!("Not implemented")
         }
     }
 }
@@ -89,24 +117,28 @@ enum MenuItem {
     BaseUrl,
     Query,
     Payload,
-    Headers
+    Headers,
+    Requests
 }
+
 impl MenuItem {
     fn next(&self) -> Self {
         match self {
             Self::BaseUrl => Self::Query,
             Self::Query => Self::Payload,
             Self::Payload => Self::Headers,
-            Self::Headers => Self::BaseUrl
+            Self::Headers => Self::Requests,
+            Self::Requests => Self::BaseUrl
         }
     }
 
     fn previous(&self) -> Self {
         match self {
-            Self::BaseUrl => Self::Headers,
+            Self::BaseUrl => Self::Requests,
             Self::Query => Self::BaseUrl,
             Self::Payload => Self::Query,
-            Self::Headers => Self::Payload
+            Self::Headers => Self::Payload,
+            Self::Requests => Self::Headers
         }
     }
 }
@@ -166,6 +198,7 @@ impl From<MenuItem> for usize {
             MenuItem::Query => 1,
             MenuItem::Payload => 2,
             MenuItem::Headers => 3,
+            MenuItem::Requests => 4,
         }
     }
 }
@@ -173,7 +206,8 @@ impl From<MenuItem> for usize {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode().expect("can run in raw mode");
-    let mut user_input = UserInput::default();
+    let (user_req, user_requests) = load_requests();
+    let mut user_input = UserInput::from(user_req);
     let mut app_output = AppOutput::default();
 
     let (tx, rx) = mpsc::channel();
@@ -202,6 +236,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    let mut req_list_state = ListState::default();
+    req_list_state.select(Some(0));
     terminal.clear()?;
 
     loop {
@@ -222,7 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let method_and_url_chunk = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(5), Constraint::Percentage(95)].as_ref())
+                .constraints([Constraint::Length(12), Constraint::Min(50)].as_ref())
                 .split(chunks[0]);
 
             let method = Paragraph::new(user_input.method.to_string())
@@ -232,7 +268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
                     .style(focused_style(&user_input, MenuItem::BaseUrl))
-                    .title("-Method--")
+                    .title("---Method--")
                     .border_type(BorderType::Plain),
                     );
             rect.render_widget(method, method_and_url_chunk[0]);
@@ -249,25 +285,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
             rect.render_widget(base_url, method_and_url_chunk[1]);
 
-
-            let copyright = Paragraph::new("HTTP Request Explorer")
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Center)
-                .block(
-                    Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().fg(Color::White))
-                    .title("Copyright")
-                    .border_type(BorderType::Plain),
-                    );
-            rect.render_widget(copyright, chunks[2]);
-
             let request_chunk = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
-                    [Constraint::Percentage(20), Constraint::Percentage(80)].as_ref()
+                    [Constraint::Length(30), Constraint::Length(50), Constraint::Min(50)].as_ref()
                     )
                 .split(chunks[1]);
+
+            let requests_list = render_reqs(&user_requests, &user_input);
+
+            rect.render_stateful_widget(requests_list, request_chunk[0], &mut req_list_state);
 
             let request_data_chunk = Layout::default()
                 .direction(Direction::Vertical)
@@ -277,12 +304,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Constraint::Percentage(35)]
                     .as_ref()
                     )
-                .split(request_chunk[0]);
+                .split(request_chunk[1]);
 
             let request_result_chunk = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints( [Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
-                .split(request_chunk[1]);
+                .split(request_chunk[2]);
 
             let query = Paragraph::new(user_input.query.as_ref())
                 .style(Style::default().fg(Color::LightCyan))
@@ -294,6 +321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .title("Query")
                     .border_type(BorderType::Plain),
                     );
+
             rect.render_widget(query, request_data_chunk[0]);
 
             let payload = Paragraph::new(user_input.payload.as_ref())
@@ -344,6 +372,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
             rect.render_widget(result_payload, request_result_chunk[1]);
 
+            let copyright = Paragraph::new("HTTP Request Explorer")
+                .style(Style::default().fg(Color::LightCyan))
+                .alignment(Alignment::Center)
+                .block(
+                    Block::default()
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(Color::White))
+                    .title("Copyright")
+                    .border_type(BorderType::Plain),
+                    );
+            rect.render_widget(copyright, chunks[2]);
+
             match user_input.active_menu_item {
                 MenuItem::BaseUrl =>  {
                     let (x_offset, y_offset) = parse_coord(&user_input.url);
@@ -374,7 +414,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         request_data_chunk[2].x + x_offset,
                         request_data_chunk[2].y + y_offset,
                         )
-                }
+                },
+                _ => {}
             }
 
         })?;
@@ -592,4 +633,67 @@ fn parse_headers(headers: &str) -> Result<HeaderMap, Box<dyn std::error::Error>>
                 );
         });
     Ok(header_map)
+}
+
+
+const DB_PATH: &str = "./cartero.json";
+
+fn op(_: std::io::Error) -> Result<String,Box<dyn std::error::Error>> {
+    Ok(String::from("[]"))
+}
+
+fn read_db() -> Result<Vec<CRequest>, Box<dyn std::error::Error>> {
+    let db_content = fs::read_to_string(DB_PATH).or_else(op)?;
+    let parsed: Vec<CRequest> = serde_json::from_str(&db_content)?;
+    Ok(parsed)
+}
+
+fn load_requests() -> (CRequest, Vec<CRequest>) {
+    let req_list = read_db().expect("can fetch request list");
+    let items: Vec<_> = req_list
+        .iter()
+        .map(|req| {
+            ListItem::new(Spans::from(vec![Span::styled(
+                        req.url.clone(),
+                        Style::default(),
+                        )]))
+        })
+        .collect();
+
+    let request = if req_list.len() > 0 {
+        req_list.get(0).expect("exists").clone()
+    } else {
+        CRequest::default()
+    };
+
+    (request, req_list)
+
+}
+
+fn render_reqs<'a>(user_reqs : &Vec<CRequest>, user_input: &UserInput) -> List<'a> {
+    let requests = Block::default()
+        .borders(Borders::ALL)
+        // .style(Style::default().fg(Color::White))
+        .style(focused_style(&user_input, MenuItem::Requests))
+        .title("Requests")
+        .border_type(BorderType::Plain);
+
+    let items: Vec<_> = user_reqs
+        .iter()
+        .map(|req| {
+            ListItem::new(Spans::from(vec![Span::styled(
+                req.url.clone(),
+                Style::default(),
+            )]))
+        })
+        .collect();
+
+    let list = List::new(items).block(requests).highlight_style(
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    list
 }
