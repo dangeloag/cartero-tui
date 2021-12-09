@@ -422,19 +422,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match rx.recv()? {
             Event::Input(event) => match event {
+                /////////////////////////////////////////////////////////////////////////
+                //                         SUPER GLOBAL                                //
+                /////////////////////////////////////////////////////////////////////////
+                KeyEvent { modifiers: _, code: KeyCode::Tab} => {
+                    user_input.active_menu_item = user_input.active_menu_item.next();
+                },
+                KeyEvent { modifiers: _, code: KeyCode::BackTab} => {
+                    user_input.active_menu_item = user_input.active_menu_item.previous();
+                },
+                /////////////////////////////////////////////////////////////////////////
+                //                          BASER_URL MENU                             //
+                /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: _,
                     code: KeyCode::Enter
                 } if user_input.active_menu_item == MenuItem::BaseUrl => {
-                    process_request(&user_input, &mut app_output);
-                },
-                /////////////////////////////////////////////////////////////////////////
-                //                               GLOBAL                                //
-                /////////////////////////////////////////////////////////////////////////
-                KeyEvent {
-                    modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Enter
-                } => {
                     process_request(&user_input, &mut app_output);
                 },
                 KeyEvent {
@@ -450,8 +453,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     user_input.method = user_input.method.previous()
                 },
                 /////////////////////////////////////////////////////////////////////////
+                //                              REQUEST MENU                           //
+                /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Down
+                } if user_input.active_menu_item == MenuItem::Requests => {
+                            if let Some(selected) = req_list_state.selected() {
+                                // TODO: read from db?
+                                let amount_pets = user_requests.len();
+                                if selected >= amount_pets - 1 {
+                                    req_list_state.select(Some(0));
+                                } else {
+                                    req_list_state.select(Some(selected+1))
+                                }
+                                let new_sel = user_requests.get(req_list_state.selected().unwrap()).unwrap().clone();
+                                update_user_input(&mut user_input, &new_sel);
+                            }
+                }
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Up
+                } if user_input.active_menu_item == MenuItem::Requests => {
+                            if let Some(selected) = req_list_state.selected() {
+                                // TODO: read from db?
+                                let amount_pets = user_requests.len();
+                                if selected == 0 {
+                                    req_list_state.select(Some(amount_pets -1 ));
+                                } else {
+                                    req_list_state.select(Some(selected-1))
+                                }
+                                let new_sel = user_requests.get(req_list_state.selected().unwrap()).unwrap().clone();
+                                update_user_input(&mut user_input, &new_sel);
+                        }
+                },
+                KeyEvent {
+                    modifiers: _,
+                    code: _
+                } if user_input.active_menu_item == MenuItem::Requests => {
+                }
+                /////////////////////////////////////////////////////////////////////////
                 //                               GLOBAL - ALT                          //
                 /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: KeyModifiers::ALT,
+                    code: KeyCode::Enter
+                } => {
+                    process_request(&user_input, &mut app_output);
+                },
+                KeyEvent {
+                    modifiers: KeyModifiers::ALT,
+                    code: KeyCode::Char('s')
+                } => { },
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
                     code: KeyCode::Char('1')
@@ -500,12 +553,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 /////////////////////////////////////////////////////////////////////////
                 //                      GLOBAL- NO MODIFIERS                           //
                 /////////////////////////////////////////////////////////////////////////
-                KeyEvent { modifiers: _, code: KeyCode::Tab} => {
-                    user_input.active_menu_item = user_input.active_menu_item.next();
-                },
-                KeyEvent { modifiers: _, code: KeyCode::BackTab} => {
-                    user_input.active_menu_item = user_input.active_menu_item.previous();
-                },
                 KeyEvent { modifiers: _, code: KeyCode::Char(c) } => {
                     user_input.get_active().push(c);
                 },
