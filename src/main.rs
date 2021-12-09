@@ -61,6 +61,18 @@ struct CRequest {
     headers: String,
 }
 
+impl From<UserInput> for CRequest {
+    fn from(user_input : UserInput) -> Self {
+        CRequest {
+            url: user_input.url,
+            query: user_input.query,
+            payload: user_input.payload,
+            headers: user_input.headers,
+            method: user_input.method,
+        }
+    }
+}
+
 impl Default for CRequest {
     fn default() -> Self {
         CRequest {
@@ -206,7 +218,7 @@ impl From<MenuItem> for usize {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode().expect("can run in raw mode");
-    let (user_req, user_requests) = load_requests();
+    let (user_req, _) = load_requests();
     let mut user_input = UserInput::from(user_req);
     let mut app_output = AppOutput::default();
 
@@ -241,6 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.clear()?;
 
     loop {
+        let (_, user_requests) = load_requests();
         terminal.draw(|rect| {
             let size = rect.size();
             let chunks = Layout::default()
@@ -534,6 +547,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('a')
+                } => {
+                    add_request();
+                },
+                KeyEvent {
+                    modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('s')
+                } => {
+                    if let Some(selected) = req_list_state.selected() {
+                        let mut requests = read_db().expect("Can read database");
+                        let cq = CRequest::from(user_input.clone());
+                        let _ = std::mem::replace(&mut requests[selected], cq);
+                        write_db(requests);
+                    }
+                },
+                KeyEvent {
+                    modifiers: KeyModifiers::CONTROL,
                     code: KeyCode::Char('q')
                 } => {
                     disable_raw_mode()?;
@@ -697,15 +727,6 @@ fn read_db() -> Result<Vec<CRequest>, Box<dyn std::error::Error>> {
 
 fn load_requests() -> (CRequest, Vec<CRequest>) {
     let req_list = read_db().expect("can fetch request list");
-    let items: Vec<_> = req_list
-        .iter()
-        .map(|req| {
-            ListItem::new(Spans::from(vec![Span::styled(
-                        req.url.clone(),
-                        Style::default(),
-                        )]))
-        })
-        .collect();
 
     let request = if req_list.len() > 0 {
         req_list.get(0).expect("exists").clone()
@@ -720,7 +741,6 @@ fn load_requests() -> (CRequest, Vec<CRequest>) {
 fn render_reqs<'a>(user_reqs : &Vec<CRequest>, user_input: &UserInput) -> List<'a> {
     let requests = Block::default()
         .borders(Borders::ALL)
-        // .style(Style::default().fg(Color::White))
         .style(focused_style(&user_input, MenuItem::Requests))
         .title("Requests")
         .border_type(BorderType::Plain);
@@ -728,19 +748,57 @@ fn render_reqs<'a>(user_reqs : &Vec<CRequest>, user_input: &UserInput) -> List<'
     let items: Vec<_> = user_reqs
         .iter()
         .map(|req| {
-            ListItem::new(Spans::from(vec![Span::styled(
-                req.url.clone(),
-                Style::default(),
-            )]))
+            ListItem::new(Spans::from(vec![
+                                      Span::styled(req.method.to_string(), req.method.get_style()),
+                                      Span::styled(" ", Style::default()),
+                                      Span::styled( req.url.clone(), Style::default(),)
+            ]))
         })
-        .collect();
+    .collect();
 
     let list = List::new(items).block(requests).highlight_style(
         Style::default()
-            .bg(Color::Yellow)
-            .fg(Color::Black)
+            // .bg(Color::Yellow)
+            .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     );
 
     list
+}
+
+fn add_request() {
+    let mut requests = read_db().expect("Should read database");
+    let new_req = CRequest::default();
+    requests.push(new_req);
+    write_db(requests);
+}
+
+
+fn write_db(requests : Vec<CRequest>) {
+    let buf = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"    ");
+    let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
+    requests.serialize(&mut ser).expect("Can be serialized");
+    // fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;
+    fs::write(DB_PATH, ser.into_inner()).expect("Can write to database");
+}
+
+fn update_user_input( user_input: &mut UserInput, new_sel: &CRequest ) {
+    user_input.url.drain(..);
+    for c in new_sel.url.chars() {
+        user_input.url.push(c);
+    }
+    user_input.query.drain(..);
+    for c in new_sel.query.chars() {
+        user_input.query.push(c);
+    }
+    user_input.payload.drain(..);
+    for c in new_sel.payload.chars() {
+        user_input.payload.push(c);
+    }
+    user_input.headers.drain(..);
+    user_input.headers.push_str(&new_sel.headers[..]);
+    // for c in new_sel.headers.chars() {
+    //     user_input.headers.push(c);
+    // }
 }
