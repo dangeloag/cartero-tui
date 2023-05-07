@@ -1,19 +1,34 @@
 use chrono::prelude::*;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode, KeyEvent, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use fancy_regex::Regex;
-use reqwest::{blocking::Response, header::{HeaderMap, HeaderName, HeaderValue}};
+use reqwest::{
+    blocking::Response,
+    header::{HeaderMap, HeaderName, HeaderValue},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, fs::File, io, str::FromStr, ops::Add};
-use std::io::prelude::*;
-use std::thread;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
-use tui::{Terminal, backend::CrosstermBackend, layout::{Alignment, Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, text::{Span, Spans}, widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Clear}};
-
+use std::{fs, fs::File, io};
+use std::{io::prelude::*, process::Stdio};
+use std::{str::FromStr, sync::mpsc};
+use std::{
+    sync::atomic::AtomicBool,
+    time::{Duration, Instant},
+};
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+};
+use tui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Span, Spans},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
+    Terminal,
+};
 
 enum Event<I> {
     Input(I),
@@ -21,18 +36,9 @@ enum Event<I> {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Pet {
-    id: usize,
-    name: String,
-    category: String,
-    age: usize,
-    created_at: DateTime<Utc>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
 struct Servers {
     value: Vec<String>,
-    active: usize
+    active: usize,
 }
 
 impl Servers {
@@ -51,7 +57,6 @@ impl Servers {
     fn add_server(&mut self, s: String) {
         self.value.push(s);
     }
-
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -62,11 +67,11 @@ struct UserInput {
     query: String,
     payload: String,
     headers: String,
-    active_menu_item: MenuItem
+    active_menu_item: MenuItem,
 }
 
 impl From<CRequest> for UserInput {
-    fn from(c_req : CRequest) -> Self {
+    fn from(c_req: CRequest) -> Self {
         UserInput {
             server: c_req.server,
             path: c_req.path,
@@ -74,7 +79,7 @@ impl From<CRequest> for UserInput {
             payload: c_req.payload,
             headers: c_req.headers,
             method: c_req.method,
-            active_menu_item: MenuItem::Server
+            active_menu_item: MenuItem::Server,
         }
     }
 }
@@ -92,11 +97,11 @@ struct CRequest {
 #[derive(Serialize, Deserialize, Clone)]
 struct LocalStorage {
     servers: Servers,
-    requests: Vec<CRequest>
+    requests: Vec<CRequest>,
 }
 
 impl From<UserInput> for CRequest {
-    fn from(user_input : UserInput) -> Self {
+    fn from(user_input: UserInput) -> Self {
         CRequest {
             server: user_input.server,
             path: user_input.path,
@@ -123,27 +128,27 @@ impl Default for CRequest {
 
 struct AppOutput {
     response_headers: String,
-    response_payload: String
+    response_payload: String,
 }
 
 impl Default for AppOutput {
     fn default() -> Self {
         AppOutput {
             response_headers: String::new(),
-            response_payload: String::new()
+            response_payload: String::new(),
         }
     }
 }
 
 impl UserInput {
-    fn get_active(&mut self) -> &mut String{
+    fn get_active(&mut self) -> &mut String {
         match self.active_menu_item {
             MenuItem::Server => &mut self.server,
             MenuItem::Path => &mut self.path,
             MenuItem::Query => &mut self.query,
             MenuItem::Payload => &mut self.payload,
             MenuItem::Headers => &mut self.headers,
-            _=> panic!("Not implemented")
+            _ => panic!("Not implemented"),
         }
     }
 }
@@ -170,18 +175,22 @@ enum MenuItem {
     Payload,
     Headers,
     Requests,
-    Popup
+    Popup,
 }
 
 impl MenuItem {
     fn next(&self) -> Self {
-        let curr : usize = usize::from(*self);
+        let curr: usize = usize::from(*self);
         MenuItem::from(curr + 1)
     }
 
     fn previous(&self) -> Self {
-        let curr : usize = usize::from(*self);
-        if curr == 0 { MenuItem::Headers } else { MenuItem::from(curr - 1)}
+        let curr: usize = usize::from(*self);
+        if curr == 0 {
+            MenuItem::Headers
+        } else {
+            MenuItem::from(curr - 1)
+        }
     }
 }
 
@@ -190,12 +199,12 @@ enum HttpMethod {
     GET,
     POST,
     PUT,
-    DELETE
+    DELETE,
 }
 
 impl HttpMethod {
     fn to_string(&self) -> String {
-        match  self {
+        match self {
             Self::GET => String::from("GET"),
             Self::POST => String::from("POST"),
             Self::PUT => String::from("PUT"),
@@ -204,34 +213,38 @@ impl HttpMethod {
     }
 
     fn previous(&self) -> Self {
-        match  self {
+        match self {
             Self::GET => Self::DELETE,
             Self::POST => Self::GET,
             Self::PUT => Self::POST,
-            Self::DELETE => Self::PUT
+            Self::DELETE => Self::PUT,
         }
     }
 
     fn next(&self) -> Self {
-        match  self {
+        match self {
             Self::GET => Self::POST,
             Self::POST => Self::PUT,
             Self::PUT => Self::DELETE,
-            Self::DELETE => Self::GET
+            Self::DELETE => Self::GET,
         }
     }
 
     fn get_style(&self) -> Style {
-        match  self {
-            Self::GET => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
-            Self::POST =>Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            Self::PUT => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        match self {
+            Self::GET => Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+            Self::POST => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            Self::PUT => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
             Self::DELETE => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         }
     }
-
 }
-
 
 impl From<MenuItem> for usize {
     fn from(input: MenuItem) -> usize {
@@ -263,16 +276,18 @@ impl From<usize> for MenuItem {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-
     enable_raw_mode().expect("can run in raw mode");
-    let mut local_storage : LocalStorage = read_db().unwrap();
+    let mut local_storage: LocalStorage = read_db().unwrap();
     // let servers = local_storage.servers;
     let (user_req, _) = load_requests();
     let mut user_input = UserInput::from(user_req);
     let mut app_output = AppOutput::default();
-    let mut popup : bool = false;
+    let mut popup: bool = false;
+    let vim_running = Arc::new(AtomicBool::new(false));
+    let vim_running_loop_ref = vim_running.clone();
 
     let (tx, rx) = mpsc::channel();
+    let (vim_tx, vim_rx) = mpsc::channel();
     let tick_rate = Duration::from_millis(200);
     thread::spawn(move || {
         let mut last_tick = Instant::now();
@@ -283,7 +298,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if event::poll(timeout).expect("poll works") {
                 if let CEvent::Key(key) = event::read().expect("can read events") {
-                    tx.send(Event::Input(key)).expect("can send events");
+                    if vim_running_loop_ref.load(std::sync::atomic::Ordering::Relaxed) {
+                        vim_rx.recv().unwrap();
+                    } else {
+                        tx.send(Event::Input(key)).expect("can send events");
+                    }
                 }
             }
 
@@ -296,6 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let stdout = io::stdout();
+    // execute!(stdout, EnterAlternateScreen);
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut req_list_state = ListState::default();
@@ -313,21 +333,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .margin(2)
                 .constraints(
                     [
-                    Constraint::Length(3),
-                    Constraint::Min(2),
-                    Constraint::Length(3),
+                        Constraint::Length(3),
+                        Constraint::Min(2),
+                        Constraint::Length(3),
                     ]
                     .as_ref(),
-                    )
+                )
                 .split(size);
 
             let method_and_url_chunk = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([
-                             Constraint::Length(user_input.method.to_string().len() as u16 + 10),
-                             Constraint::Length(user_input.server.len() as u16 + 2),
-                             Constraint::Min(50)
-                ].as_ref())
+                .constraints(
+                    [
+                        Constraint::Length(user_input.method.to_string().len() as u16 + 10),
+                        Constraint::Length(user_input.server.len() as u16 + 2),
+                        Constraint::Min(50),
+                    ]
+                    .as_ref(),
+                )
                 .split(chunks[0]);
 
             let method = Paragraph::new(user_input.method.to_string())
@@ -335,11 +358,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
-                    .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
-                    .style(focused_style(&user_input, MenuItem::Server))
-                    .title("---Method--")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
+                        .style(focused_style(&user_input, MenuItem::Server))
+                        .title("---Method--")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(method, method_and_url_chunk[0]);
 
             let base_url = Paragraph::new(user_input.server.as_ref())
@@ -347,11 +370,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::TOP | Borders::BOTTOM)
-                    .style(focused_style(&user_input, MenuItem::Server))
-                    .title("server")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::TOP | Borders::BOTTOM)
+                        .style(focused_style(&user_input, MenuItem::Server))
+                        .title("server")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(base_url, method_and_url_chunk[1]);
 
             let path = Paragraph::new(user_input.path.as_ref())
@@ -359,18 +382,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
-                    .style(focused_style(&user_input, MenuItem::Path))
-                    .title("path")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
+                        .style(focused_style(&user_input, MenuItem::Path))
+                        .title("path")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(path, method_and_url_chunk[2]);
 
             let request_chunk = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
-                    [Constraint::Length(30), Constraint::Length(50), Constraint::Min(50)].as_ref()
-                    )
+                    [
+                        Constraint::Length(30),
+                        Constraint::Length(50),
+                        Constraint::Min(50),
+                    ]
+                    .as_ref(),
+                )
                 .split(chunks[1]);
 
             let requests_list = render_reqs(&user_requests, &user_input);
@@ -380,16 +408,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let request_data_chunk = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(
-                    [Constraint::Percentage(30),
-                    Constraint::Percentage(35),
-                    Constraint::Percentage(35)]
-                    .as_ref()
-                    )
+                    [
+                        Constraint::Percentage(30),
+                        Constraint::Percentage(35),
+                        Constraint::Percentage(35),
+                    ]
+                    .as_ref(),
+                )
                 .split(request_chunk[1]);
 
             let request_result_chunk = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints( [Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
                 .split(request_chunk[2]);
 
             let query = Paragraph::new(user_input.query.as_ref())
@@ -397,11 +427,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::ALL)
-                    .style(focused_style(&user_input, MenuItem::Query))
-                    .title("Query")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::ALL)
+                        .style(focused_style(&user_input, MenuItem::Query))
+                        .title("Query")
+                        .border_type(BorderType::Plain),
+                );
 
             rect.render_widget(query, request_data_chunk[0]);
 
@@ -410,11 +440,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::ALL)
-                    .style(focused_style(&user_input, MenuItem::Payload))
-                    .title("Payload")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::ALL)
+                        .style(focused_style(&user_input, MenuItem::Payload))
+                        .title("Payload")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(payload, request_data_chunk[1]);
 
             let headers = Paragraph::new(user_input.headers.as_ref())
@@ -422,11 +452,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::ALL)
-                    .style(focused_style(&user_input, MenuItem::Headers))
-                    .title("Headers")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::ALL)
+                        .style(focused_style(&user_input, MenuItem::Headers))
+                        .title("Headers")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(headers, request_data_chunk[2]);
 
             let result_headers = Paragraph::new(app_output.response_headers.as_ref())
@@ -434,11 +464,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().fg(Color::White))
-                    .title("Response Headers")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .title("Response Headers")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(result_headers, request_result_chunk[0]);
 
             let result_payload = Paragraph::new(app_output.response_payload.as_ref())
@@ -446,11 +476,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Left)
                 .block(
                     Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().fg(Color::White))
-                    .title("Response Payload")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .title("Response Payload")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(result_payload, request_result_chunk[1]);
 
             let copyright = Paragraph::new("HTTP Request Explorer")
@@ -458,17 +488,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().fg(Color::White))
-                    .title("Copyright")
-                    .border_type(BorderType::Plain),
-                    );
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White))
+                        .title("Copyright")
+                        .border_type(BorderType::Plain),
+                );
             rect.render_widget(copyright, chunks[2]);
 
             if popup {
-
                 let requests_list2 = render_popup(&local_storage.servers.value, &user_input);
-                let block = Block::default().title("Popup").borders(Borders::ALL);
+                let _ = Block::default().title("Popup").borders(Borders::ALL);
                 let area = centered_rect(60, 20, size);
                 rect.render_widget(Clear, area); //this clears out the background
                 rect.render_stateful_widget(requests_list2, area, &mut req_list_state2);
@@ -476,48 +505,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             match user_input.active_menu_item {
-                MenuItem::Server =>  {
+                MenuItem::Server => {
                     let (x_offset, y_offset) = parse_coord(&user_input.server);
                     rect.set_cursor(
                         // method_and_url_chunk[1].x + user_input.url.len() as u16 + 0,
                         // method_and_url_chunk[1].y + 1,
                         method_and_url_chunk[1].x + x_offset as u16 - 1,
                         method_and_url_chunk[1].y + y_offset as u16,
-                        );
-                },
-                MenuItem::Path =>  {
+                    );
+                }
+                MenuItem::Path => {
                     let (x_offset, y_offset) = parse_coord(&user_input.path);
                     rect.set_cursor(
                         // method_and_url_chunk[1].x + user_input.url.len() as u16 + 0,
                         // method_and_url_chunk[1].y + 1,
                         method_and_url_chunk[2].x + x_offset as u16 - 1,
                         method_and_url_chunk[2].y + y_offset as u16,
-                        );
-                },
+                    );
+                }
                 MenuItem::Query => {
                     let (x_offset, y_offset) = parse_coord(&user_input.query);
                     rect.set_cursor(
                         request_data_chunk[0].x + x_offset,
                         request_data_chunk[0].y + y_offset,
-                        )
-                },
+                    )
+                }
                 MenuItem::Payload => {
                     let (x_offset, y_offset) = parse_coord(&user_input.payload);
                     rect.set_cursor(
                         request_data_chunk[1].x + x_offset,
                         request_data_chunk[1].y + y_offset,
-                        )
-                },
+                    )
+                }
                 MenuItem::Headers => {
                     let (x_offset, y_offset) = parse_coord(&user_input.headers);
                     rect.set_cursor(
                         request_data_chunk[2].x + x_offset,
                         request_data_chunk[2].y + y_offset,
-                        )
-                },
+                    )
+                }
                 _ => {}
             }
-
         })?;
 
         match rx.recv()? {
@@ -525,265 +553,343 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 /////////////////////////////////////////////////////////////////////////
                 //                         SUPER GLOBAL                                //
                 /////////////////////////////////////////////////////////////////////////
-                KeyEvent { modifiers: _, code: KeyCode::Tab} => {
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Tab,
+                } => {
                     user_input.active_menu_item = user_input.active_menu_item.next();
-                },
-                KeyEvent { modifiers: _, code: KeyCode::BackTab} => {
+                }
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::BackTab,
+                } => {
                     user_input.active_menu_item = user_input.active_menu_item.previous();
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('1')
+                    code: KeyCode::Char('1'),
                 } => {
                     user_input.active_menu_item = MenuItem::Server;
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('2')
+                    code: KeyCode::Char('2'),
                 } => {
                     user_input.active_menu_item = MenuItem::Requests;
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('3')
+                    code: KeyCode::Char('3'),
                 } => {
                     user_input.active_menu_item = MenuItem::Query;
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('4')
-                } => {
-                    user_input.active_menu_item = MenuItem::Payload
-                },
+                    code: KeyCode::Char('4'),
+                } => user_input.active_menu_item = MenuItem::Payload,
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('5')
-                } => {
-                    user_input.active_menu_item = MenuItem::Headers
-                },
+                    code: KeyCode::Char('5'),
+                } => user_input.active_menu_item = MenuItem::Headers,
 
                 /////////////////////////////////////////////////////////////////////////
                 //                          SERVER/PATH MENU                             //
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Enter
-                } if user_input.active_menu_item == MenuItem::Server || user_input.active_menu_item == MenuItem::Path => {
+                    code: KeyCode::Enter,
+                } if user_input.active_menu_item == MenuItem::Server
+                    || user_input.active_menu_item == MenuItem::Path =>
+                {
                     process_request(&user_input, &mut app_output);
-                },
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Down
-                } |
-                KeyEvent {
-                    modifiers: KeyModifiers::CONTROL, code: KeyCode::Char('j')
-                } if user_input.active_menu_item == MenuItem::Server || user_input.active_menu_item == MenuItem::Path => {
+                    code: KeyCode::Down,
+                }
+                | KeyEvent {
+                    modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('j'),
+                } if user_input.active_menu_item == MenuItem::Server
+                    || user_input.active_menu_item == MenuItem::Path =>
+                {
                     user_input.method = user_input.method.next()
-                },
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Up
-                } |
-                KeyEvent {
-                    modifiers: KeyModifiers::CONTROL, code: KeyCode::Char('k')
-                } if user_input.active_menu_item == MenuItem::Server || user_input.active_menu_item == MenuItem::Path => {
+                    code: KeyCode::Up,
+                }
+                | KeyEvent {
+                    modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('k'),
+                } if user_input.active_menu_item == MenuItem::Server
+                    || user_input.active_menu_item == MenuItem::Path =>
+                {
                     user_input.method = user_input.method.previous()
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('l')
-                } if user_input.active_menu_item == MenuItem::Server || user_input.active_menu_item == MenuItem::Path => {
+                    code: KeyCode::Char('l'),
+                } if user_input.active_menu_item == MenuItem::Server
+                    || user_input.active_menu_item == MenuItem::Path =>
+                {
                     popup = !popup;
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('s')
-                } if user_input.active_menu_item == MenuItem::Server || user_input.active_menu_item == MenuItem::Path => {
-                    local_storage.servers.set_active(String::from(&user_input.server[..]));
+                    code: KeyCode::Char('h'),
+                } if user_input.active_menu_item == MenuItem::Server
+                    || user_input.active_menu_item == MenuItem::Path =>
+                {
+                    local_storage
+                        .servers
+                        .set_active(String::from(&user_input.server[..]));
                     write_db(local_storage.clone());
-                },
+                }
 
                 /////////////////////////////////////////////////////////////////////////
                 //                              POPUP MENU                           //
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Char('q') | KeyCode::Esc
-                } if  user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Char('q') | KeyCode::Esc,
+                } if user_input.active_menu_item == MenuItem::Popup => {
                     user_input.active_menu_item = MenuItem::Path;
                     popup = false;
-                },
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Enter
-                } if  user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Enter,
+                } if user_input.active_menu_item == MenuItem::Popup => {
                     let new_selected = req_list_state2.selected().unwrap();
-                    user_input.server = local_storage.servers.value.get(new_selected).unwrap().into();
-                    local_storage.servers.active =  new_selected;
+                    user_input.server = local_storage
+                        .servers
+                        .value
+                        .get(new_selected)
+                        .unwrap()
+                        .into();
+                    local_storage.servers.active = new_selected;
                     user_input.active_menu_item = MenuItem::Path;
                     popup = false;
-                },
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Down | KeyCode::Char('j')
-                } if  user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Down | KeyCode::Char('j'),
+                } if user_input.active_menu_item == MenuItem::Popup => {
                     let amount_svrs = read_db().unwrap().servers.value.len();
                     if amount_svrs > 0 {
                         if let Some(selected) = req_list_state2.selected() {
                             if selected >= amount_svrs - 1 {
                                 req_list_state2.select(Some(0));
                             } else {
-                                req_list_state2.select(Some(selected+1))
+                                req_list_state2.select(Some(selected + 1))
                             }
                         }
                     }
                 }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Up | KeyCode::Char('k')
-                } if user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Up | KeyCode::Char('k'),
+                } if user_input.active_menu_item == MenuItem::Popup => {
                     if let Some(selected) = req_list_state2.selected() {
                         let amount_svrs = local_storage.servers.value.len();
                         if selected <= amount_svrs + 1 {
                             req_list_state2.select(Some(0));
                         } else {
-                            req_list_state2.select(Some(selected+1))
+                            req_list_state2.select(Some(selected + 1))
                         }
                     }
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('a') | KeyCode::Esc
-                } if  user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Char('a') | KeyCode::Esc,
+                } if user_input.active_menu_item == MenuItem::Popup => {
                     local_storage.servers.add_server(String::from("localhost"));
                     write_db(local_storage.clone());
-                },
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: _
-                } if  user_input.active_menu_item == MenuItem::Popup => {}
+                    code: _,
+                } if user_input.active_menu_item == MenuItem::Popup => {}
                 /////////////////////////////////////////////////////////////////////////
                 //                              REQUEST MENU                           //
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Char('a')
+                    code: KeyCode::Char('a'),
                 } if user_input.active_menu_item == MenuItem::Requests => {
-                    add_request(&user_input,  &mut local_storage);
-                },
+                    add_request(&user_input, &mut local_storage);
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Char('d')
+                    code: KeyCode::Char('d'),
                 } if user_input.active_menu_item == MenuItem::Requests => {
-                    delete_request(&user_input,  &mut local_storage, &req_list_state);
-                },
+                    delete_request(&user_input, &mut local_storage, &req_list_state);
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Down | KeyCode::Char('j')
-                } if user_input.active_menu_item == MenuItem::Requests || user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Down | KeyCode::Char('j'),
+                } if user_input.active_menu_item == MenuItem::Requests
+                    || user_input.active_menu_item == MenuItem::Popup =>
+                {
                     if let Some(selected) = req_list_state.selected() {
                         // TODO: read from db?
                         let amount_pets = user_requests.len();
                         if selected >= amount_pets - 1 {
                             req_list_state.select(Some(0));
                         } else {
-                            req_list_state.select(Some(selected+1))
+                            req_list_state.select(Some(selected + 1))
                         }
-                        let new_sel = user_requests.get(req_list_state.selected().unwrap()).unwrap().clone();
+                        let new_sel = user_requests
+                            .get(req_list_state.selected().unwrap())
+                            .unwrap()
+                            .clone();
                         update_user_input(&mut user_input, &new_sel);
                     }
                 }
                 KeyEvent {
                     modifiers: _,
-                    code: KeyCode::Up | KeyCode::Char('k')
-                        // } if user_input.active_menu_item == MenuItem::Requests => {
-                } if user_input.active_menu_item == MenuItem::Requests || user_input.active_menu_item == MenuItem::Popup=> {
+                    code: KeyCode::Up | KeyCode::Char('k'), // } if user_input.active_menu_item == MenuItem::Requests => {
+                } if user_input.active_menu_item == MenuItem::Requests
+                    || user_input.active_menu_item == MenuItem::Popup =>
+                {
                     if let Some(selected) = req_list_state.selected() {
                         // TODO: read from db?
                         let amount_pets = user_requests.len();
                         if selected == 0 {
-                            req_list_state.select(Some(amount_pets -1 ));
+                            req_list_state.select(Some(amount_pets - 1));
                         } else {
-                            req_list_state.select(Some(selected-1))
+                            req_list_state.select(Some(selected - 1))
                         }
-                        let new_sel = user_requests.get(req_list_state.selected().unwrap()).unwrap().clone();
+                        let new_sel = user_requests
+                            .get(req_list_state.selected().unwrap())
+                            .unwrap()
+                            .clone();
                         update_user_input(&mut user_input, &new_sel);
                     }
-                },
+                }
                 KeyEvent {
                     modifiers: _,
-                    code: _
-                } if user_input.active_menu_item == MenuItem::Requests => {
+                    code: _,
+                } if user_input.active_menu_item == MenuItem::Requests => {}
+                /////////////////////////////////////////////////////////////////////////
+                //                      PAYLOAD MENU                                   //
+                /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('e'),
+                } if user_input.active_menu_item == MenuItem::Payload => {
+                    let mut temp_file = tempfile::NamedTempFile::new()?;
+                    if user_input.get_active().len() > 0 {
+                        temp_file.write_all(user_input.get_active().as_bytes())?;
+                    }
+
+                    let vim_cmd = format!("vim {}", temp_file.path().display());
+                    let mut output = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&vim_cmd)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::inherit())
+                        .stderr(Stdio::inherit())
+                        .spawn()
+                        .expect("Can run vim cmd");
+                    vim_running.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let vim_cmd_result = output.wait().expect("Run exits ok");
+                    vim_tx.send(1).unwrap();
+                    vim_running.store(false, std::sync::atomic::Ordering::Relaxed);
+
+                    if !vim_cmd_result.success() {
+                        return Err(format!(
+                            "Vim exited with status code {}",
+                            vim_cmd_result.code().unwrap_or(-1)
+                        )
+                        .into());
+                    }
+
+                    let mut edited_text = String::new();
+                    std::fs::File::open(temp_file.path())?.read_to_string(&mut edited_text)?;
+
+                    user_input.get_active().clear();
+                    user_input.get_active().push_str(edited_text.as_str());
                 }
                 /////////////////////////////////////////////////////////////////////////
                 //                               GLOBAL - ALT                          //
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Enter
+                    code: KeyCode::Enter,
                 } => {
                     process_request(&user_input, &mut app_output);
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('s')
-                } => { },
+                    code: KeyCode::Char('s'),
+                } => {}
                 /////////////////////////////////////////////////////////////////////////
                 //                          GLOBAL - CONTROL                           //
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('s')
+                    code: KeyCode::Char('s'),
                 } => {
                     if let Some(selected) = req_list_state.selected() {
                         let mut data = read_db().expect("Can read database");
                         let cq = CRequest::from(user_input.clone());
                         let _ = std::mem::replace(&mut data.requests[selected], cq);
-                        let _ = std::mem::replace(&mut data.servers.get_active(), &user_input.server);
+                        let _ =
+                            std::mem::replace(&mut data.servers.get_active(), &user_input.server);
                         write_db(data);
                     }
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('q')
+                    code: KeyCode::Char('q'),
                 } => {
                     disable_raw_mode()?;
                     terminal.clear()?;
                     terminal.show_cursor()?;
                     break;
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('u')
+                    code: KeyCode::Char('u'),
                 } => {
                     user_input.get_active().drain(..);
-                },
+                }
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
-                    code: _
-                } => {},
+                    code: _,
+                } => {}
                 /////////////////////////////////////////////////////////////////////////
                 //                      GLOBAL- NO MODIFIERS                           //
                 /////////////////////////////////////////////////////////////////////////
-                KeyEvent { modifiers: _, code: KeyCode::Char(c) } => {
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Char(c),
+                } => {
                     user_input.get_active().push(c);
-                },
-                KeyEvent { modifiers: _, code: KeyCode::Enter } => {
+                }
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Enter,
+                } => {
                     user_input.get_active().push_str("\n");
-                },
-                KeyEvent { modifiers: _, code: KeyCode::Backspace} => {
+                }
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Backspace,
+                } => {
                     user_input.get_active().pop();
-                },
+                }
                 _ => {}
-                },
-                    Event::Tick => {}
-            }
-
+            },
+            Event::Tick => {}
+        }
     }
     Ok(())
 }
 
-fn process_request(input_data: &UserInput,  app_output: &mut AppOutput) {
+fn process_request(input_data: &UserInput, app_output: &mut AppOutput) {
     let response_result = send_request(&input_data);
     match response_result {
         Ok(response) => {
@@ -795,50 +901,54 @@ fn process_request(input_data: &UserInput,  app_output: &mut AppOutput) {
             let formatter = serde_json::ser::PrettyFormatter::with_indent(b"    ");
             let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
             let response_text = &response.text().expect("Valid text response");
-            let json_result : Result<Value, _> = serde_json::from_str(&response_text);
+            let json_result: Result<Value, _> = serde_json::from_str(&response_text);
             if let Ok(json) = json_result {
                 json.serialize(&mut ser).unwrap();
-                app_output.response_payload= String::from_utf8(ser.into_inner()).unwrap();
+                app_output.response_payload = String::from_utf8(ser.into_inner()).unwrap();
             } else {
                 app_output.response_payload = String::from(response_text)
             }
-        },
+        }
         Err(shoot) => {
             app_output.response_payload = shoot.to_string();
         }
     }
 }
 
-fn send_request( input_data: &UserInput ) -> Result<Response, Box<dyn std::error::Error>> {
+fn send_request(input_data: &UserInput) -> Result<Response, Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::new();
     let query = parse_query(&input_data.query)?;
     let url = format!("{}{}?{}", &input_data.server, &input_data.path, query);
-    let headers : HeaderMap = parse_headers(&input_data.headers)?;
+    let headers: HeaderMap = parse_headers(&input_data.headers)?;
     match input_data.method {
         HttpMethod::GET => {
-            let  response = client.get(url)
-                .headers(headers)
-                .send()?;
+            let response = client.get(url).headers(headers).send()?;
             Ok(response)
-        },
+        }
         HttpMethod::POST => {
-            let payload : &str = &input_data.payload;
+            let payload: &str = &input_data.payload;
             let body;
             if payload.len() > 0 {
-                let filename = format!("/tmp/{}-{}{}.json", &input_data.method.to_string(), Utc::now().format("%Y%m%d_"), &Utc::now().format("%s").to_string()[4..]);
+                let filename = format!(
+                    "/tmp/{}-{}{}.json",
+                    &input_data.method.to_string(),
+                    Utc::now().format("%Y%m%d_"),
+                    &Utc::now().format("%s").to_string()[4..]
+                );
                 let mut file = File::create(&filename)?;
                 file.write(input_data.payload.as_bytes())?;
                 body = std::fs::File::open(filename)?;
             } else {
                 body = std::fs::File::create("/tmp/empty.body")?;
             }
-            let res = client.post(url)
-                .headers(headers)
-                .body(body);
+            let res = client.post(url).headers(headers).body(body);
             let response = res.send()?;
             Ok(response)
-        },
-        _ => Err(Box::from(format!("Method {} not implemented yet", input_data.method.to_string())))
+        }
+        _ => Err(Box::from(format!(
+            "Method {} not implemented yet",
+            input_data.method.to_string()
+        ))),
     }
 }
 
@@ -850,55 +960,63 @@ fn focused_style(user_input: &UserInput, item: MenuItem) -> Style {
     }
 }
 
-fn parse_coord(text: &str) -> ( u16, u16 ) {
-    let list : Vec<&str> = text.split("\n").collect();
+fn parse_coord(text: &str) -> (u16, u16) {
+    let list: Vec<&str> = text.split("\n").collect();
     let x_offset = list.last().unwrap().len() as u16 + 1;
     let y_offset = list.len() as u16;
     (x_offset, y_offset)
 }
 
 fn parse_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
-    if query.len() == 0 { return Ok("".into()) }
-    let query = Regex::new("\n+$").unwrap()
-        .replace_all(query, "");
-    let valid_format = Regex::new(r"^((?>[^=\n\s]+=[^=\n]+)\n?)+$").unwrap().is_match(&query).unwrap();
-    if !valid_format { return Err(Box::from("Not valid query format")); }
-    let query = Regex::new("\n").unwrap()
-        .replace_all(&query, "&");
+    if query.len() == 0 {
+        return Ok("".into());
+    }
+    let query = Regex::new("\n+$").unwrap().replace_all(query, "");
+    let valid_format = Regex::new(r"^((?>[^=\n\s]+=[^=\n]+)\n?)+$")
+        .unwrap()
+        .is_match(&query)
+        .unwrap();
+    if !valid_format {
+        return Err(Box::from("Not valid query format"));
+    }
+    let query = Regex::new("\n").unwrap().replace_all(&query, "&");
     Ok(query.to_string())
 }
 
 fn parse_headers(headers: &str) -> Result<HeaderMap, Box<dyn std::error::Error>> {
-    if headers.len() == 0 { return Ok(HeaderMap::new()) }
-    let headers = Regex::new("\n+$") .unwrap()
-        .replace_all(headers, "");
-    let valid_format = Regex::new(r"^((?>[^:\n\s]+\s?:[^:\n]+)\n?)+$").unwrap().is_match(&headers).unwrap();
-    if !valid_format { return Err(Box::from("Not valid header format")); }
-    let headers : Vec<(&str, &str)> = headers
+    if headers.len() == 0 {
+        return Ok(HeaderMap::new());
+    }
+    let headers = Regex::new("\n+$").unwrap().replace_all(headers, "");
+    let valid_format = Regex::new(r"^((?>[^:\n\s]+\s?:[^:\n]+)\n?)+$")
+        .unwrap()
+        .is_match(&headers)
+        .unwrap();
+    if !valid_format {
+        return Err(Box::from("Not valid header format"));
+    }
+    let headers: Vec<(&str, &str)> = headers
         .split("\n")
         .map(|h| {
-            let kv : Vec<&str> = h.split(":")
-                .map(|v| v.trim()).collect();
+            let kv: Vec<&str> = h.split(":").map(|v| v.trim()).collect();
             (kv[0], kv[1])
-
-        }).collect();
+        })
+        .collect();
     let mut header_map = HeaderMap::new();
-    headers
-        .iter()
-        .for_each(|(name, value)| {
-            header_map.insert(
-                HeaderName::from_str(name).unwrap(),
-                HeaderValue::from_str(value).unwrap()
-                );
-        });
+    headers.iter().for_each(|(name, value)| {
+        header_map.insert(
+            HeaderName::from_str(name).unwrap(),
+            HeaderValue::from_str(value).unwrap(),
+        );
+    });
     Ok(header_map)
 }
 
-
 const DB_PATH: &str = "./cartero.json";
 
-fn default_config(_: std::io::Error) -> Result<String,Box<dyn std::error::Error>> {
-    Ok(String::from(r#"
+fn default_config(_: std::io::Error) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(String::from(
+        r#"
     {
      "servers": {
          "value": ["http://localhost"],
@@ -914,7 +1032,8 @@ fn default_config(_: std::io::Error) -> Result<String,Box<dyn std::error::Error>
             "headers": ""
             
         }]
-    }"#))
+    }"#,
+    ))
 }
 
 fn read_db() -> Result<LocalStorage, Box<dyn std::error::Error>> {
@@ -934,10 +1053,9 @@ fn load_requests() -> (CRequest, Vec<CRequest>) {
     };
 
     (request, req_list)
-
 }
 
-fn render_reqs<'a>(user_reqs : &Vec<CRequest>, user_input: &UserInput) -> List<'a> {
+fn render_reqs<'a>(user_reqs: &Vec<CRequest>, user_input: &UserInput) -> List<'a> {
     let requests = Block::default()
         .borders(Borders::ALL)
         .style(focused_style(&user_input, MenuItem::Requests))
@@ -951,14 +1069,13 @@ fn render_reqs<'a>(user_reqs : &Vec<CRequest>, user_input: &UserInput) -> List<'
         .map(|req| {
             // let parsed_owned_req_path = url_socket.replace(&req.path.clone(),"").clone().to_string();
             ListItem::new(Spans::from(vec![
-                                      Span::styled(req.method.to_string(), req.method.get_style()),
-                                      Span::styled(" ", Style::default()),
-                                      Span::styled(req.path.clone(), Style::default(),)
-                                      // Span::styled(parsed_owned_req_path, Style::default(),)
-                                      // Span::styled(req.url.clone().replace(r"http://", ""), Style::default(),)
+                Span::styled(req.method.to_string(), req.method.get_style()),
+                Span::styled(" ", Style::default()),
+                Span::styled(req.path.clone(), Style::default()), // Span::styled(parsed_owned_req_path, Style::default(),)
+                                                                  // Span::styled(req.url.clone().replace(r"http://", ""), Style::default(),)
             ]))
         })
-    .collect();
+        .collect();
 
     let list = List::new(items).block(requests).highlight_style(
         Style::default()
@@ -970,7 +1087,7 @@ fn render_reqs<'a>(user_reqs : &Vec<CRequest>, user_input: &UserInput) -> List<'
     list
 }
 
-fn render_popup<'a>(servers : &Vec<String>, user_input: &UserInput) -> List<'a> {
+fn render_popup<'a>(servers: &Vec<String>, user_input: &UserInput) -> List<'a> {
     let servers_block = Block::default()
         .borders(Borders::ALL)
         .style(focused_style(&user_input, MenuItem::Popup))
@@ -984,12 +1101,12 @@ fn render_popup<'a>(servers : &Vec<String>, user_input: &UserInput) -> List<'a> 
         .map(|svr| {
             // let parsed_owned_req_path = url_socket.replace(&req.path.clone(),"").clone().to_string();
             ListItem::new(Spans::from(vec![
-                                      Span::styled(svr.clone(), Style::default()),
-                                      // Span::styled(parsed_owned_req_path, Style::default(),)
-                                      // Span::styled(req.url.clone().replace(r"http://", ""), Style::default(),)
+                Span::styled(svr.clone(), Style::default()),
+                // Span::styled(parsed_owned_req_path, Style::default(),)
+                // Span::styled(req.url.clone().replace(r"http://", ""), Style::default(),)
             ]))
         })
-    .collect();
+        .collect();
 
     let list = List::new(items).block(servers_block).highlight_style(
         Style::default()
@@ -1001,33 +1118,26 @@ fn render_popup<'a>(servers : &Vec<String>, user_input: &UserInput) -> List<'a> 
     list
 }
 
-fn add_request(user_input: &UserInput, data: &mut LocalStorage) {
-    // let mut data = read_db().expect("Should read database");
+fn add_request(_: &UserInput, data: &mut LocalStorage) {
     let new_req = CRequest::default();
-    // data.servers.set_active(user_input.server.clone());
     data.requests.push(new_req);
     write_db(data.clone());
 }
 
-fn delete_request(user_input: &UserInput, data: &mut LocalStorage, req_list: &ListState) {
-    // let mut data = read_db().expect("Should read database");
-    // data.servers.set_active(user_input.server.clone());
+fn delete_request(_: &UserInput, data: &mut LocalStorage, req_list: &ListState) {
     data.requests.remove(req_list.selected().unwrap());
     write_db(data.clone());
 }
 
-
-fn write_db(data : LocalStorage) {
-    // let data = LocalStorage { servers: Vec::new(), requests: requests };
+fn write_db(data: LocalStorage) {
     let buf = Vec::new();
     let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
     let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
     data.serialize(&mut ser).expect("Can be serialized");
-    // fs::write(DB_PATH, &serde_json::to_vec(&parsed)?)?;
     fs::write(DB_PATH, ser.into_inner()).expect("Can write to database");
 }
 
-fn update_user_input( user_input: &mut UserInput, new_sel: &CRequest ) {
+fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest) {
     user_input.server.drain(..);
     user_input.server.push_str(&new_sel.server[..]);
 
