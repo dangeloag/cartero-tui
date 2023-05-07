@@ -1,7 +1,7 @@
 use chrono::prelude::*;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode, KeyEvent, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use fancy_regex::Regex;
 use reqwest::{
@@ -17,10 +17,7 @@ use std::{
     sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
-use std::{
-    sync::{Arc, Mutex},
-    thread,
-};
+use std::{sync::Arc, thread};
 use tui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -117,8 +114,8 @@ impl Default for CRequest {
     fn default() -> Self {
         CRequest {
             method: HttpMethod::GET,
-            server: String::from("http://localhost:3000"),
-            path: String::from("/rust"),
+            server: String::from("http://localhost"),
+            path: String::new(),
             query: String::new(),
             payload: String::new(),
             headers: String::new(),
@@ -157,7 +154,7 @@ impl Default for UserInput {
     fn default() -> Self {
         UserInput {
             method: HttpMethod::GET,
-            server: String::from("http://localhost:3000/rust"),
+            server: String::from("http://localhost"),
             path: String::new(),
             query: String::new(),
             payload: String::new(),
@@ -744,7 +741,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .get(req_list_state.selected().unwrap())
                             .unwrap()
                             .clone();
-                        update_user_input(&mut user_input, &new_sel);
+                        update_user_input(&mut user_input, &new_sel, &local_storage.servers);
                     }
                 }
                 KeyEvent {
@@ -765,7 +762,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .get(req_list_state.selected().unwrap())
                             .unwrap()
                             .clone();
-                        update_user_input(&mut user_input, &new_sel);
+                        update_user_input(&mut user_input, &new_sel, &local_storage.servers);
                     }
                 }
                 KeyEvent {
@@ -1137,9 +1134,9 @@ fn write_db(data: LocalStorage) {
     fs::write(DB_PATH, ser.into_inner()).expect("Can write to database");
 }
 
-fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest) {
+fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, local_storate: &Servers) {
     user_input.server.drain(..);
-    user_input.server.push_str(&new_sel.server[..]);
+    user_input.server.push_str(local_storate.get_active());
 
     user_input.path.drain(..);
     user_input.path.push_str(&new_sel.path[..]);
