@@ -10,7 +10,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, fs::File, io};
+use std::{collections::HashMap, fs, fs::File, io};
 use std::{io::prelude::*, process::Stdio};
 use std::{str::FromStr, sync::mpsc};
 use std::{
@@ -64,6 +64,7 @@ struct UserInput {
     query: String,
     payload: String,
     headers: String,
+    parsing_rules: String,
     active_menu_item: MenuItem,
 }
 
@@ -75,6 +76,7 @@ impl From<CRequest> for UserInput {
             query: c_req.query,
             payload: c_req.payload,
             headers: c_req.headers,
+            parsing_rules: c_req.parsing_rules,
             method: c_req.method,
             active_menu_item: MenuItem::Server,
         }
@@ -89,6 +91,12 @@ struct CRequest {
     query: String,
     payload: String,
     headers: String,
+    #[serde(default = "emtpy_string")]
+    parsing_rules: String,
+}
+
+fn emtpy_string() -> String {
+    String::from("")
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -106,6 +114,7 @@ impl From<UserInput> for CRequest {
             payload: user_input.payload,
             headers: user_input.headers,
             method: user_input.method,
+            parsing_rules: user_input.parsing_rules,
         }
     }
 }
@@ -119,6 +128,7 @@ impl Default for CRequest {
             query: String::new(),
             payload: String::new(),
             headers: String::new(),
+            parsing_rules: String::new(),
         }
     }
 }
@@ -145,6 +155,7 @@ impl UserInput {
             MenuItem::Query => &mut self.query,
             MenuItem::Payload => &mut self.payload,
             MenuItem::Headers => &mut self.headers,
+            MenuItem::ParsingRulesPopup => &mut self.parsing_rules,
             _ => panic!("Not implemented"),
         }
     }
@@ -159,6 +170,7 @@ impl Default for UserInput {
             query: String::new(),
             payload: String::new(),
             headers: String::new(),
+            parsing_rules: String::new(),
             active_menu_item: MenuItem::Server,
         }
     }
@@ -173,6 +185,7 @@ enum MenuItem {
     Headers,
     Requests,
     Popup,
+    ParsingRulesPopup,
 }
 
 impl MenuItem {
@@ -253,6 +266,7 @@ impl From<MenuItem> for usize {
             MenuItem::Payload => 4,
             MenuItem::Headers => 5,
             MenuItem::Popup => 6,
+            MenuItem::ParsingRulesPopup => 7,
         }
     }
 }
@@ -267,6 +281,7 @@ impl From<usize> for MenuItem {
             4 => MenuItem::Payload,
             5 => MenuItem::Headers,
             6 => MenuItem::Popup,
+            7 => MenuItem::ParsingRulesPopup,
             _ => MenuItem::Server,
         }
     }
@@ -280,6 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut user_input = UserInput::from(user_req);
     let mut app_output = AppOutput::default();
     let mut popup: bool = false;
+    let mut parsing_rules_popup: bool = false;
     let vim_running = Arc::new(AtomicBool::new(false));
     let vim_running_loop_ref = vim_running.clone();
 
@@ -501,6 +517,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 user_input.active_menu_item = MenuItem::Popup;
             }
 
+            if parsing_rules_popup {
+                let _ = Block::default().title("Popup").borders(Borders::ALL);
+                let area = centered_rect(50, 30, size);
+                let rules_text = Paragraph::new(user_input.parsing_rules.as_ref())
+                    .style(Style::default().fg(Color::LightCyan))
+                    .alignment(Alignment::Left)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .style(focused_style(&user_input, MenuItem::ParsingRulesPopup))
+                            .title("Parsing Rules")
+                            .border_type(BorderType::Plain),
+                    );
+
+                rect.render_widget(Clear, area); //this clears out the background
+                rect.render_widget(rules_text, area);
+                user_input.active_menu_item = MenuItem::ParsingRulesPopup;
+            }
+
             match user_input.active_menu_item {
                 MenuItem::Server => {
                     let (x_offset, y_offset) = parse_coord(&user_input.server);
@@ -643,7 +678,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .set_active(String::from(&user_input.server[..]));
                     write_db(local_storage.clone());
                 }
-
+                /////////////////////////////////////////////////////////////////////////
+                //                              PARSING POPUP MENU                           //
+                /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: _,
+                    code: KeyCode::Char('q') | KeyCode::Esc,
+                } if user_input.active_menu_item == MenuItem::ParsingRulesPopup => {
+                    user_input.active_menu_item = MenuItem::Path;
+                    parsing_rules_popup = false;
+                }
                 /////////////////////////////////////////////////////////////////////////
                 //                              POPUP MENU                           //
                 /////////////////////////////////////////////////////////////////////////
@@ -765,10 +809,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         update_user_input(&mut user_input, &new_sel, &local_storage.servers);
                     }
                 }
-                KeyEvent {
-                    modifiers: _,
-                    code: _,
-                } if user_input.active_menu_item == MenuItem::Requests => {}
+                // KeyEvent {
+                //     modifiers: _,
+                //     code: _,
+                // } if user_input.active_menu_item == MenuItem::Requests => {}
                 /////////////////////////////////////////////////////////////////////////
                 //                      PAYLOAD MENU                                   //
                 /////////////////////////////////////////////////////////////////////////
@@ -825,6 +869,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 /////////////////////////////////////////////////////////////////////////
                 //                          GLOBAL - CONTROL                           //
                 /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('r'),
+                } => parsing_rules_popup = true,
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
                     code: KeyCode::Char('s'),
@@ -905,11 +953,52 @@ fn process_request(input_data: &UserInput, app_output: &mut AppOutput) {
             } else {
                 app_output.response_payload = String::from(response_text)
             }
+            let parsin_rules = parse_rules(&input_data.parsing_rules[..]);
+
+            for rule in parsin_rules {
+                let json_value: Value = serde_json::from_str(response_text).unwrap();
+
+                if let Some(field_value) = json_value.pointer(&rule.1[..]) {
+                    print!("{}", field_value)
+                }
+            }
         }
         Err(shoot) => {
             app_output.response_payload = shoot.to_string();
         }
     }
+}
+
+// fn extract_and_save_matching_result(
+//     word: &str,
+//     json_path: &str,
+//     results_map: &mut HashMap<String, String>,
+// ) -> Result<(), Box<dyn std::error::Error>> {
+//     let json_value: Value = serde_json::from_str(&response_body)?;
+//
+//     if let Some(field_value) = json_value.pointer(json_path).unwrap().as_str() {
+//         if field_value.contains(word) {
+//             results_map.insert(json_path.to_owned(), field_value.to_owned());
+//         }
+//     }
+//
+//     Ok(())
+// }
+
+fn parse_rules(rules: &str) -> Vec<(String, String)> {
+    let rules_vec: Vec<&str> = rules.split('\n').collect();
+
+    let re = Regex::new(r"([a-zA-Z_.-]+)\s*->\s*(/.*)").unwrap();
+    let mut fields_vec: Vec<(String, String)> = vec![];
+
+    for rule in rules_vec {
+        if let Some(caps) = re.captures(rule).unwrap() {
+            let field_name = caps.get(1).unwrap().as_str();
+            let json_path = caps.get(2).unwrap().as_str();
+            fields_vec.push((field_name.to_owned(), json_path.to_owned()));
+        }
+    }
+    return fields_vec;
 }
 
 fn send_request(input_data: &UserInput) -> Result<Response, Box<dyn std::error::Error>> {
@@ -1149,6 +1238,11 @@ fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, local_stora
 
     user_input.headers.drain(..);
     user_input.headers.push_str(&new_sel.headers[..]);
+
+    user_input.parsing_rules.drain(..);
+    user_input
+        .parsing_rules
+        .push_str(&new_sel.parsing_rules[..]);
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
