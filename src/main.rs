@@ -4,6 +4,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use fancy_regex::Regex;
+use regex::Captures;
 use reqwest::{
     blocking::Response,
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -43,17 +44,21 @@ impl Servers {
         &self.value[self.active]
     }
 
-    fn set_active(&mut self, s: String) {
-        if let Some(_) = self.value.get(self.active) {
-            self.value[self.active] = s;
-        } else {
-            self.value.push(s);
-        }
+    fn update_active(&mut self, s: String) {
+        self.value[self.active] = s;
+    }
+
+    fn set_active(&mut self, idx: usize) {
+        // let idx = self.value.iter().position(|x| *x == s).unwrap_or(0);
+        self.active = idx;
     }
 
     fn add_server(&mut self, s: String) {
-        self.value.push(s);
+        self.value.push(s.clone());
+        self.set_active(self.active + 1);
     }
+
+    fn next(&mut self) {}
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -99,8 +104,14 @@ fn emtpy_string() -> String {
     String::from("")
 }
 
+fn default_env() -> HashMap<String, String> {
+    HashMap::new()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct LocalStorage {
+    #[serde(default = "default_env")]
+    env: HashMap<String, String>,
     servers: Servers,
     requests: Vec<CRequest>,
 }
@@ -155,6 +166,7 @@ impl UserInput {
             MenuItem::Query => &mut self.query,
             MenuItem::Payload => &mut self.payload,
             MenuItem::Headers => &mut self.headers,
+            MenuItem::ServerListPopup => &mut self.server,
             MenuItem::ParsingRulesPopup => &mut self.parsing_rules,
             _ => panic!("Not implemented"),
         }
@@ -184,7 +196,7 @@ enum MenuItem {
     Payload,
     Headers,
     Requests,
-    Popup,
+    ServerListPopup,
     ParsingRulesPopup,
 }
 
@@ -265,7 +277,7 @@ impl From<MenuItem> for usize {
             MenuItem::Query => 3,
             MenuItem::Payload => 4,
             MenuItem::Headers => 5,
-            MenuItem::Popup => 6,
+            MenuItem::ServerListPopup => 6,
             MenuItem::ParsingRulesPopup => 7,
         }
     }
@@ -280,7 +292,7 @@ impl From<usize> for MenuItem {
             3 => MenuItem::Query,
             4 => MenuItem::Payload,
             5 => MenuItem::Headers,
-            6 => MenuItem::Popup,
+            6 => MenuItem::ServerListPopup,
             7 => MenuItem::ParsingRulesPopup,
             _ => MenuItem::Server,
         }
@@ -332,9 +344,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut req_list_state = ListState::default();
-    let mut req_list_state2 = ListState::default();
+    let mut server_list_state = ListState::default();
+    let servers = read_db().unwrap().servers;
     req_list_state.select(Some(0));
-    req_list_state2.select(Some(0));
+    server_list_state.select(Some(servers.active));
     terminal.clear()?;
 
     loop {
@@ -513,8 +526,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = Block::default().title("Popup").borders(Borders::ALL);
                 let area = centered_rect(60, 20, size);
                 rect.render_widget(Clear, area); //this clears out the background
-                rect.render_stateful_widget(requests_list2, area, &mut req_list_state2);
-                user_input.active_menu_item = MenuItem::Popup;
+                rect.render_stateful_widget(requests_list2, area, &mut server_list_state);
+                user_input.active_menu_item = MenuItem::ServerListPopup;
             }
 
             if parsing_rules_popup {
@@ -585,6 +598,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 /////////////////////////////////////////////////////////////////////////
                 //                         SUPER GLOBAL                                //
                 /////////////////////////////////////////////////////////////////////////
+                // KeyEvent {
+                //     modifiers: _,
+                //     code: KeyCode::PageDown,
+                // } => result_payload.scroll((10,10)),
                 KeyEvent {
                     modifiers: _,
                     code: KeyCode::Tab,
@@ -631,9 +648,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modifiers: _,
                     code: KeyCode::Enter,
                 } if user_input.active_menu_item == MenuItem::Server
-                    || user_input.active_menu_item == MenuItem::Path =>
+                    || user_input.active_menu_item == MenuItem::Path
+                    || user_input.active_menu_item == MenuItem::Requests =>
                 {
-                    process_request(&user_input, &mut app_output);
+                    process_request(&user_input, &mut app_output, &mut local_storage);
                 }
                 KeyEvent {
                     modifiers: _,
@@ -667,17 +685,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     popup = !popup;
                 }
-                KeyEvent {
-                    modifiers: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('h'),
-                } if user_input.active_menu_item == MenuItem::Server
-                    || user_input.active_menu_item == MenuItem::Path =>
-                {
-                    local_storage
-                        .servers
-                        .set_active(String::from(&user_input.server[..]));
-                    write_db(local_storage.clone());
-                }
+                // KeyEvent {
+                //     modifiers: _,
+                //     code: KeyCode::Char(c),
+                // } if user_input.active_menu_item == MenuItem::Server => {
+                //     user_input.get_active().push(c);
+                //     local_storage
+                //         .servers
+                //         .update_active(user_input.get_active().to_owned())
+                // }
+                // KeyEvent {
+                //     modifiers: KeyModifiers::CONTROL,
+                //     code: KeyCode::Char('s'),
+                // } if user_input.active_menu_item == MenuItem::Server
+                //     || user_input.active_menu_item == MenuItem::Path =>
+                // {
+                //     local_storage
+                //         .servers
+                //         .update_active(String::from(&user_input.server));
+                //     write_db(local_storage.clone());
+                // }
+                // KeyEvent {
+                //     modifiers: KeyModifiers::CONTROL,
+                //     code: KeyCode::Char('h'),
+                // } if user_input.active_menu_item == MenuItem::Server
+                //     || user_input.active_menu_item == MenuItem::Path =>
+                // {
+                //     local_storage
+                //         .servers
+                //         .set_active(String::from(&user_input.server[..]));
+                //     write_db(local_storage.clone());
+                // }
                 /////////////////////////////////////////////////////////////////////////
                 //                              PARSING POPUP MENU                           //
                 /////////////////////////////////////////////////////////////////////////
@@ -694,15 +732,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyEvent {
                     modifiers: _,
                     code: KeyCode::Char('q') | KeyCode::Esc,
-                } if user_input.active_menu_item == MenuItem::Popup => {
+                } if user_input.active_menu_item == MenuItem::ServerListPopup => {
                     user_input.active_menu_item = MenuItem::Path;
                     popup = false;
                 }
                 KeyEvent {
                     modifiers: _,
                     code: KeyCode::Enter,
-                } if user_input.active_menu_item == MenuItem::Popup => {
-                    let new_selected = req_list_state2.selected().unwrap();
+                } if user_input.active_menu_item == MenuItem::ServerListPopup => {
+                    let new_selected = server_list_state.selected().unwrap();
                     user_input.server = local_storage
                         .servers
                         .value
@@ -716,42 +754,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyEvent {
                     modifiers: _,
                     code: KeyCode::Down | KeyCode::Char('j'),
-                } if user_input.active_menu_item == MenuItem::Popup => {
-                    let amount_svrs = read_db().unwrap().servers.value.len();
+                } if user_input.active_menu_item == MenuItem::ServerListPopup => {
+                    let amount_svrs = local_storage.servers.value.len();
+                    let mut new_selection = 0;
                     if amount_svrs > 0 {
-                        if let Some(selected) = req_list_state2.selected() {
+                        if let Some(selected) = server_list_state.selected() {
                             if selected >= amount_svrs - 1 {
-                                req_list_state2.select(Some(0));
+                                new_selection = 0;
                             } else {
-                                req_list_state2.select(Some(selected + 1))
+                                new_selection = selected + 1;
                             }
+                            server_list_state.select(Some(new_selection));
+                            local_storage.servers.set_active(new_selection);
                         }
                     }
                 }
                 KeyEvent {
                     modifiers: _,
                     code: KeyCode::Up | KeyCode::Char('k'),
-                } if user_input.active_menu_item == MenuItem::Popup => {
-                    if let Some(selected) = req_list_state2.selected() {
+                } if user_input.active_menu_item == MenuItem::ServerListPopup => {
+                    if let Some(selected) = server_list_state.selected() {
                         let amount_svrs = local_storage.servers.value.len();
-                        if selected <= amount_svrs + 1 {
-                            req_list_state2.select(Some(0));
+                        let mut new_selection = 0;
+                        if selected == 0 {
+                            new_selection = amount_svrs - 1;
                         } else {
-                            req_list_state2.select(Some(selected + 1))
+                            new_selection = selected - 1;
                         }
+                        server_list_state.select(Some(new_selection));
+                        local_storage.servers.set_active(new_selection);
                     }
                 }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
                     code: KeyCode::Char('a') | KeyCode::Esc,
-                } if user_input.active_menu_item == MenuItem::Popup => {
+                } if user_input.active_menu_item == MenuItem::ServerListPopup => {
                     local_storage.servers.add_server(String::from("localhost"));
                     write_db(local_storage.clone());
                 }
                 KeyEvent {
                     modifiers: _,
                     code: _,
-                } if user_input.active_menu_item == MenuItem::Popup => {}
+                } if user_input.active_menu_item == MenuItem::ServerListPopup => {}
                 /////////////////////////////////////////////////////////////////////////
                 //                              REQUEST MENU                           //
                 /////////////////////////////////////////////////////////////////////////
@@ -771,7 +815,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modifiers: _,
                     code: KeyCode::Down | KeyCode::Char('j'),
                 } if user_input.active_menu_item == MenuItem::Requests
-                    || user_input.active_menu_item == MenuItem::Popup =>
+                    || user_input.active_menu_item == MenuItem::ServerListPopup =>
                 {
                     if let Some(selected) = req_list_state.selected() {
                         // TODO: read from db?
@@ -792,7 +836,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modifiers: _,
                     code: KeyCode::Up | KeyCode::Char('k'), // } if user_input.active_menu_item == MenuItem::Requests => {
                 } if user_input.active_menu_item == MenuItem::Requests
-                    || user_input.active_menu_item == MenuItem::Popup =>
+                    || user_input.active_menu_item == MenuItem::ServerListPopup =>
                 {
                     if let Some(selected) = req_list_state.selected() {
                         // TODO: read from db?
@@ -809,10 +853,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         update_user_input(&mut user_input, &new_sel, &local_storage.servers);
                     }
                 }
-                // KeyEvent {
-                //     modifiers: _,
-                //     code: _,
-                // } if user_input.active_menu_item == MenuItem::Requests => {}
                 /////////////////////////////////////////////////////////////////////////
                 //                      PAYLOAD MENU                                   //
                 /////////////////////////////////////////////////////////////////////////
@@ -823,6 +863,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut temp_file = tempfile::NamedTempFile::new()?;
                     if user_input.get_active().len() > 0 {
                         temp_file.write_all(user_input.get_active().as_bytes())?;
+                    } else {
+                        temp_file.write_all("{\n\"\" : \"\"\n}".as_bytes())?;
                     }
 
                     let vim_cmd = format!("vim {}", temp_file.path().display());
@@ -860,7 +902,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modifiers: KeyModifiers::ALT,
                     code: KeyCode::Enter,
                 } => {
-                    process_request(&user_input, &mut app_output);
+                    process_request(&user_input, &mut app_output, &mut local_storage);
                 }
                 KeyEvent {
                     modifiers: KeyModifiers::ALT,
@@ -878,12 +920,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     code: KeyCode::Char('s'),
                 } => {
                     if let Some(selected) = req_list_state.selected() {
-                        let mut data = read_db().expect("Can read database");
+                        // let mut data = read_db().expect("Can read database");
                         let cq = CRequest::from(user_input.clone());
-                        let _ = std::mem::replace(&mut data.requests[selected], cq);
-                        let _ =
-                            std::mem::replace(&mut data.servers.get_active(), &user_input.server);
-                        write_db(data);
+                        local_storage.requests[selected] = cq;
+                        // let _ = std::mem::replace(&mut data.requests[selected], cq);
+                        local_storage
+                            .servers
+                            .update_active(user_input.server.to_owned());
+                        local_storage.servers = local_storage.servers;
+                        // let _ = std::mem::replace(&mut data.servers, local_storage.servers.clone());
+                        write_db(local_storage.clone());
+                        // local_storage = data
                     }
                 }
                 KeyEvent {
@@ -906,6 +953,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     code: _,
                 } => {}
                 /////////////////////////////////////////////////////////////////////////
+                //                             GLOBAL IGNORE                           //
+                /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: _,
+                    code: _,
+                } if user_input.active_menu_item == MenuItem::Requests => {}
+                /////////////////////////////////////////////////////////////////////////
                 //                      GLOBAL- NO MODIFIERS                           //
                 /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
@@ -913,6 +967,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     code: KeyCode::Char(c),
                 } => {
                     user_input.get_active().push(c);
+                    if user_input.active_menu_item == MenuItem::Server {
+                        local_storage
+                            .servers
+                            .update_active(user_input.get_active().to_owned())
+                    }
                 }
                 KeyEvent {
                     modifiers: _,
@@ -934,8 +993,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn process_request(input_data: &UserInput, app_output: &mut AppOutput) {
-    let response_result = send_request(&input_data);
+fn process_request(
+    input_data: &UserInput,
+    app_output: &mut AppOutput,
+    local_storage: &mut LocalStorage,
+) {
+    let response_result = send_request(&input_data, &local_storage.env);
     match response_result {
         Ok(response) => {
             app_output.response_headers = format!("{:?}", response.headers())
@@ -956,10 +1019,16 @@ fn process_request(input_data: &UserInput, app_output: &mut AppOutput) {
             let parsin_rules = parse_rules(&input_data.parsing_rules[..]);
 
             for rule in parsin_rules {
-                let json_value: Value = serde_json::from_str(response_text).unwrap();
-
-                if let Some(field_value) = json_value.pointer(&rule.1[..]) {
-                    print!("{}", field_value)
+                match serde_json::from_str::<Value>(response_text) {
+                    Ok(json_value) => {
+                        if let Some(field_value) = json_value.pointer(&rule.1[..]) {
+                            local_storage
+                                .env
+                                .insert(rule.0, field_value.clone().as_str().unwrap().into());
+                            write_db(local_storage.clone());
+                        }
+                    }
+                    _ => (),
                 }
             }
         }
@@ -1001,11 +1070,14 @@ fn parse_rules(rules: &str) -> Vec<(String, String)> {
     return fields_vec;
 }
 
-fn send_request(input_data: &UserInput) -> Result<Response, Box<dyn std::error::Error>> {
+fn send_request(
+    input_data: &UserInput,
+    env: &HashMap<String, String>,
+) -> Result<Response, Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::new();
     let query = parse_query(&input_data.query)?;
     let url = format!("{}{}?{}", &input_data.server, &input_data.path, query);
-    let headers: HeaderMap = parse_headers(&input_data.headers)?;
+    let headers: HeaderMap = parse_headers(&input_data.headers, env)?;
     match input_data.method {
         HttpMethod::GET => {
             let response = client.get(url).headers(headers).send()?;
@@ -1069,11 +1141,18 @@ fn parse_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(query.to_string())
 }
 
-fn parse_headers(headers: &str) -> Result<HeaderMap, Box<dyn std::error::Error>> {
+fn parse_headers(
+    headers: &str,
+    env: &HashMap<String, String>,
+) -> Result<HeaderMap, Box<dyn std::error::Error>> {
     if headers.len() == 0 {
         return Ok(HeaderMap::new());
     }
-    let headers = Regex::new("\n+$").unwrap().replace_all(headers, "");
+    let headers_with_env = replace_env_variables(headers, env);
+    let headers = Regex::new("\n+$")
+        .unwrap()
+        .replace_all(&headers_with_env, "");
+    // TODO: move regex compiltion out  of function
     let valid_format = Regex::new(r"^((?>[^:\n\s]+\s?:[^:\n]+)\n?)+$")
         .unwrap()
         .is_match(&headers)
@@ -1098,12 +1177,30 @@ fn parse_headers(headers: &str) -> Result<HeaderMap, Box<dyn std::error::Error>>
     Ok(header_map)
 }
 
+fn replace_env_variables(input: &str, values: &HashMap<String, String>) -> String {
+    let re = Regex::new(r"\{\{([a-zA-Z_-]+)\}\}").unwrap();
+    let mut output = input.to_string();
+
+    for capture in re.captures_iter(input) {
+        let capture_matches = capture.unwrap();
+        let key = capture_matches.get(1).unwrap().as_str();
+        let value = match values.get(key) {
+            Some(v) => v.to_string(),
+            None => String::new(),
+        };
+        output = output.replace(capture_matches.get(0).unwrap().as_str(), &value);
+    }
+
+    output
+}
+
 const DB_PATH: &str = "./cartero.json";
 
 fn default_config(_: std::io::Error) -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::from(
         r#"
     {
+    "env": {},
      "servers": {
          "value": ["http://localhost"],
          "active": 0
@@ -1176,7 +1273,7 @@ fn render_reqs<'a>(user_reqs: &Vec<CRequest>, user_input: &UserInput) -> List<'a
 fn render_popup<'a>(servers: &Vec<String>, user_input: &UserInput) -> List<'a> {
     let servers_block = Block::default()
         .borders(Borders::ALL)
-        .style(focused_style(&user_input, MenuItem::Popup))
+        .style(focused_style(&user_input, MenuItem::ServerListPopup))
         .title("Servers")
         .border_type(BorderType::Plain);
 
@@ -1223,9 +1320,11 @@ fn write_db(data: LocalStorage) {
     fs::write(DB_PATH, ser.into_inner()).expect("Can write to database");
 }
 
-fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, local_storate: &Servers) {
+fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, servers: &Servers) {
+    user_input.method = new_sel.method;
+
     user_input.server.drain(..);
-    user_input.server.push_str(local_storate.get_active());
+    user_input.server.push_str(servers.get_active());
 
     user_input.path.drain(..);
     user_input.path.push_str(&new_sel.path[..]);
