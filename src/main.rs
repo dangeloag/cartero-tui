@@ -4,14 +4,21 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use fancy_regex::Regex;
-use regex::Captures;
 use reqwest::{
     blocking::Response,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, fs::File, io};
+use std::{
+    collections::HashMap,
+    fs::File,
+    fs::{self, OpenOptions},
+    io::{self},
+    path::Path,
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use std::{io::prelude::*, process::Stdio};
 use std::{str::FromStr, sync::mpsc};
 use std::{
@@ -68,6 +75,7 @@ struct UserInput {
     path: String,
     query: String,
     payload: String,
+    json_path: String,
     headers: String,
     parsing_rules: String,
     active_menu_item: MenuItem,
@@ -80,6 +88,7 @@ impl From<CRequest> for UserInput {
             path: c_req.path,
             query: c_req.query,
             payload: c_req.payload,
+            json_path: String::new(),
             headers: c_req.headers,
             parsing_rules: c_req.parsing_rules,
             method: c_req.method,
@@ -147,6 +156,7 @@ impl Default for CRequest {
 struct AppOutput {
     response_headers: String,
     response_payload: String,
+    response_payload_last: String,
 }
 
 impl Default for AppOutput {
@@ -154,6 +164,7 @@ impl Default for AppOutput {
         AppOutput {
             response_headers: String::new(),
             response_payload: String::new(),
+            response_payload_last: String::new(),
         }
     }
 }
@@ -168,6 +179,7 @@ impl UserInput {
             MenuItem::Headers => &mut self.headers,
             MenuItem::ServerListPopup => &mut self.server,
             MenuItem::ParsingRulesPopup => &mut self.parsing_rules,
+            MenuItem::JsonPath => &mut self.json_path,
             _ => panic!("Not implemented"),
         }
     }
@@ -181,6 +193,7 @@ impl Default for UserInput {
             path: String::new(),
             query: String::new(),
             payload: String::new(),
+            json_path: String::new(),
             headers: String::new(),
             parsing_rules: String::new(),
             active_menu_item: MenuItem::Server,
@@ -196,6 +209,7 @@ enum MenuItem {
     Payload,
     Headers,
     Requests,
+    JsonPath,
     ServerListPopup,
     ParsingRulesPopup,
 }
@@ -209,7 +223,7 @@ impl MenuItem {
     fn previous(&self) -> Self {
         let curr: usize = usize::from(*self);
         if curr == 0 {
-            MenuItem::Headers
+            MenuItem::JsonPath
         } else {
             MenuItem::from(curr - 1)
         }
@@ -277,8 +291,9 @@ impl From<MenuItem> for usize {
             MenuItem::Query => 3,
             MenuItem::Payload => 4,
             MenuItem::Headers => 5,
-            MenuItem::ServerListPopup => 6,
-            MenuItem::ParsingRulesPopup => 7,
+            MenuItem::JsonPath => 6,
+            MenuItem::ServerListPopup => 0,
+            MenuItem::ParsingRulesPopup => 0,
         }
     }
 }
@@ -292,14 +307,21 @@ impl From<usize> for MenuItem {
             3 => MenuItem::Query,
             4 => MenuItem::Payload,
             5 => MenuItem::Headers,
-            6 => MenuItem::ServerListPopup,
-            7 => MenuItem::ParsingRulesPopup,
+            6 => MenuItem::JsonPath,
             _ => MenuItem::Server,
         }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let log_file_path = Path::new("app.log");
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file_path)?;
+
+    log_message(&mut log_file, "La puta que te pario");
+
     enable_raw_mode().expect("can run in raw mode");
     let mut local_storage: LocalStorage = read_db().unwrap();
     // let servers = local_storage.servers;
@@ -310,6 +332,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut parsing_rules_popup: bool = false;
     let vim_running = Arc::new(AtomicBool::new(false));
     let vim_running_loop_ref = vim_running.clone();
+    let jq_is_installed = jq_is_installed();
 
     let (tx, rx) = mpsc::channel();
     let (vim_tx, vim_rx) = mpsc::channel();
@@ -509,6 +532,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             rect.render_widget(result_payload, request_result_chunk[1]);
 
+            let lower_bar_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(80), Constraint::Min(50)].as_ref())
+                .split(chunks[2]);
+
             let copyright = Paragraph::new("HTTP Request Explorer")
                 .style(Style::default().fg(Color::LightCyan))
                 .alignment(Alignment::Center)
@@ -519,7 +547,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .title("Copyright")
                         .border_type(BorderType::Plain),
                 );
-            rect.render_widget(copyright, chunks[2]);
+            rect.render_widget(copyright, lower_bar_chunks[0]);
+
+            let json_path_title = if jq_is_installed {
+                "JQ"
+            } else {
+                "Serde Pointer"
+            };
+
+            let response_json_path = Paragraph::new(user_input.json_path.as_ref())
+                .style(Style::default().fg(Color::LightCyan))
+                .alignment(Alignment::Left)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .style(focused_style(&user_input, MenuItem::JsonPath))
+                        .title(json_path_title)
+                        .border_type(BorderType::Plain),
+                );
+            rect.render_widget(response_json_path, lower_bar_chunks[1]);
 
             if popup {
                 let requests_list2 = render_popup(&local_storage.servers.value, &user_input);
@@ -587,6 +633,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rect.set_cursor(
                         request_data_chunk[2].x + x_offset,
                         request_data_chunk[2].y + y_offset,
+                    )
+                }
+                MenuItem::JsonPath => {
+                    let (x_offset, y_offset) = parse_coord(&user_input.json_path);
+                    rect.set_cursor(
+                        lower_bar_chunks[1].x + x_offset,
+                        lower_bar_chunks[1].y + y_offset,
                     )
                 }
                 _ => {}
@@ -809,7 +862,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modifiers: _,
                     code: KeyCode::Char('d'),
                 } if user_input.active_menu_item == MenuItem::Requests => {
-                    delete_request(&user_input, &mut local_storage, &req_list_state);
+                    delete_request(&user_input, &mut local_storage, &mut req_list_state);
                 }
                 KeyEvent {
                     modifiers: _,
@@ -856,10 +909,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 /////////////////////////////////////////////////////////////////////////
                 //                      PAYLOAD MENU                                   //
                 /////////////////////////////////////////////////////////////////////////
+                /////////////////////////////////////////////////////////////////////////
+                //                               GLOBAL - ALT                          //
+                /////////////////////////////////////////////////////////////////////////
+                KeyEvent {
+                    modifiers: KeyModifiers::ALT,
+                    code: KeyCode::Enter,
+                } => {
+                    process_request(&user_input, &mut app_output, &mut local_storage);
+                }
+                KeyEvent {
+                    modifiers: KeyModifiers::ALT,
+                    code: KeyCode::Char('s'),
+                } => {}
+                /////////////////////////////////////////////////////////////////////////
+                //                          GLOBAL - CONTROL                           //
+                /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
                     code: KeyCode::Char('e'),
-                } if user_input.active_menu_item == MenuItem::Payload => {
+                } if is_editable(user_input.active_menu_item) => {
                     let mut temp_file = tempfile::NamedTempFile::new()?;
                     if user_input.get_active().len() > 0 {
                         temp_file.write_all(user_input.get_active().as_bytes())?;
@@ -895,22 +964,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     user_input.get_active().clear();
                     user_input.get_active().push_str(edited_text.as_str());
                 }
-                /////////////////////////////////////////////////////////////////////////
-                //                               GLOBAL - ALT                          //
-                /////////////////////////////////////////////////////////////////////////
-                KeyEvent {
-                    modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Enter,
-                } => {
-                    process_request(&user_input, &mut app_output, &mut local_storage);
-                }
-                KeyEvent {
-                    modifiers: KeyModifiers::ALT,
-                    code: KeyCode::Char('s'),
-                } => {}
-                /////////////////////////////////////////////////////////////////////////
-                //                          GLOBAL - CONTROL                           //
-                /////////////////////////////////////////////////////////////////////////
                 KeyEvent {
                     modifiers: KeyModifiers::CONTROL,
                     code: KeyCode::Char('r'),
@@ -972,6 +1025,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .servers
                             .update_active(user_input.get_active().to_owned())
                     }
+                    if user_input.active_menu_item == MenuItem::JsonPath {
+                        if jq_is_installed {
+                            parse_with_jq(&mut app_output, &mut user_input, &mut log_file)
+                        } else {
+                            parse_with_serde(&mut app_output, &mut user_input)
+                        }
+                    }
                 }
                 KeyEvent {
                     modifiers: _,
@@ -1016,6 +1076,7 @@ fn process_request(
             } else {
                 app_output.response_payload = String::from(response_text)
             }
+            app_output.response_payload_last = app_output.response_payload.clone();
             let parsin_rules = parse_rules(&input_data.parsing_rules[..]);
 
             for rule in parsin_rules {
@@ -1307,8 +1368,12 @@ fn add_request(_: &UserInput, data: &mut LocalStorage) {
     write_db(data.clone());
 }
 
-fn delete_request(_: &UserInput, data: &mut LocalStorage, req_list: &ListState) {
-    data.requests.remove(req_list.selected().unwrap());
+fn delete_request(_: &UserInput, data: &mut LocalStorage, req_list: &mut ListState) {
+    let selected_idx = req_list.selected().unwrap_or(0);
+    data.requests.remove(selected_idx);
+    if selected_idx == data.requests.len() {
+        req_list.select(Some(selected_idx - 1));
+    }
     write_db(data.clone());
 }
 
@@ -1369,4 +1434,108 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             .as_ref(),
         )
         .split(popup_layout[1])[1]
+}
+
+fn is_editable(item: MenuItem) -> bool {
+    match item {
+        MenuItem::Query => true,
+        MenuItem::Payload => true,
+        MenuItem::Headers => true,
+        MenuItem::JsonPath => true,
+        _ => false,
+    }
+}
+
+fn parse_with_serde(app_output: &mut AppOutput, user_input: &mut UserInput) {
+    match serde_json::from_str::<Value>(&app_output.response_payload_last) {
+        Ok(json_value) => {
+            if let Some(field_value) = json_value.pointer(user_input.get_active()) {
+                let field_str = match field_value {
+                    Value::Number(n) => {
+                        if n.is_u64() {
+                            n.as_u64().unwrap().to_string()
+                        } else if n.is_i64() {
+                            n.as_i64().unwrap().to_string()
+                        } else if n.is_f64() {
+                            n.as_f64().unwrap().to_string()
+                        } else {
+                            "".to_string()
+                        }
+                    }
+                    Value::String(s) => s.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => field_value.to_string(),
+                };
+                app_output.response_payload = field_str;
+            } else {
+                app_output.response_payload = app_output.response_payload_last.clone();
+            }
+        }
+        _ => (),
+    }
+
+    // match serde_json::from_str::<Value>(&app_output.response_payload_last) {
+    //     Ok(json_value) => {
+    //         if let Some(field_value) =
+    //             json_value.pointer(user_input.get_active())
+    //         {
+    //             app_output.response_payload =
+    //                 field_value.as_str().unwrap_or_else(|| "".into()).into();
+    //         } else {
+    //             app_output.response_payload =
+    //                 app_output.response_payload_last.clone();
+    //         }
+    //     }
+    //     _ => (),
+    // }
+}
+
+fn parse_with_jq(app_output: &mut AppOutput, user_input: &mut UserInput, log_file: &mut File) {
+    let filter = &user_input.json_path;
+    let jq_cmd = format!(
+        "echo -E '{}' | jq '{}'",
+        app_output.response_payload_last, filter
+    );
+
+    // log_message(log_file, &jq_cmd);
+    let filtered_str = Command::new("bash")
+        .arg("-c")
+        .arg(jq_cmd)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    // Check if there was an error with the jq command
+    if !filtered_str.status.success() {
+        app_output.response_payload = app_output.response_payload_last.clone();
+        log_message(log_file, &String::from_utf8(filtered_str.stderr).unwrap());
+        // log_message(
+        //     log_file,
+        //     &format!(
+        //         "Filter: {}\nRequest: {}",
+        //         filter,
+        //         app_output.response_payload_last.clone()
+        //     ),
+        // );
+    } else {
+        let filtered_response_str = String::from_utf8(filtered_str.stdout).unwrap();
+        app_output.response_payload = filtered_response_str;
+    }
+}
+
+fn jq_is_installed() -> bool {
+    match Command::new("jq").arg("--version").output() {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
+fn log_message(log_file: &mut File, message: &str) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    writeln!(log_file, "{} - {}", timestamp, message);
 }
