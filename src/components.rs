@@ -2,9 +2,8 @@
 
 use color_eyre::eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent};
-use std::sync::{mpsc::Receiver, Arc};
 use ratatui::layout::Rect;
-use tokio::sync::mpsc::{UnboundedSender,UnboundedReceiver, Sender};
+use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 
 use crate::{
   action::Action,
@@ -12,8 +11,8 @@ use crate::{
   tui::{Event, Frame},
 };
 
-pub mod home;
 pub mod fps;
+pub mod home;
 
 //// ANCHOR: component
 pub trait Component {

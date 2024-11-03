@@ -4,11 +4,16 @@
       "<q>": "Quit", // Quit the application
       "<j>": "ScheduleIncrement",
       "<k>": "ScheduleDecrement",
+      "<i>": "EnterInsert",
+      "<esc>": "EnterNormal",
       "<?>": "ToggleShowHelp",
       "</>": "EnterInsert",
       "<Ctrl-d>": "Quit", // Another way to quit
       "<Ctrl-c>": "Quit", // Yet another way to quit
       "<Ctrl-z>": "Suspend" // Suspend the application
     },
+    // "Insert": {
+    //   "<esc>": "EnterNormal",
+    // },
   }
 }

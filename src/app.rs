@@ -73,37 +73,57 @@ impl App {
     }
 
     loop {
-
       if let Some(e) = tui.next().await {
-        match e {
-          tui::Event::Quit => action_tx.send(Action::Quit)?,
-          tui::Event::Tick => action_tx.send(Action::Tick)?,
-          tui::Event::Render => action_tx.send(Action::Render)?,
-          tui::Event::Resize(x, y) => action_tx.send(Action::Resize(x, y))?,
-          tui::Event::Key(key) => {
-            if let Some(keymap) = self.config.keybindings.get(&self.mode) {
-              if let Some(action) = keymap.get(&vec![key.clone()]) {
-                log::info!("Got action: {action:?}");
-                action_tx.send(action.clone())?;
-              } else {
-                // If the key was not handled as a single key action,
-                // then consider it for multi-key combinations.
-                self.last_tick_key_events.push(key);
-
-                // Check for multi-key combinations
-                if let Some(action) = keymap.get(&self.last_tick_key_events) {
-                  log::info!("Got action: {action:?}");
-                  action_tx.send(action.clone())?;
+        match self.mode {
+          Mode::Home => {
+            match e {
+              tui::Event::Quit => action_tx.send(Action::Quit)?,
+              tui::Event::Tick => action_tx.send(Action::Tick)?,
+              tui::Event::Render => action_tx.send(Action::Render)?,
+              tui::Event::Resize(x, y) => action_tx.send(Action::Resize(x, y))?,
+              tui::Event::Key(key) => {
+                for component in self.components.iter_mut() {
+                  if let Some(action) = component.handle_events(Some(e.clone()))? {
+                    action_tx.send(action)?;
+                  }
                 }
-              }
-            };
+
+                // if let Some(keymap) = self.config.keybindings.get(&self.mode) {
+                //   if let Some(action) = keymap.get(&vec![key.clone()]) {
+                //     log::info!("Got action: {action:?}");
+                //     action_tx.send(action.clone())?;
+                //   } else {
+                //     // If the key was not handled as a single key action,
+                //     // then consider it for multi-key combinations.
+                //     self.last_tick_key_events.push(key);
+                //     // Check for multi-key combinations
+                //     if let Some(action) = keymap.get(&self.last_tick_key_events) {
+                //       log::info!("Got action: {action:?}");
+                //       action_tx.send(action.clone())?;
+                //     }
+                //   }
+                // };
+              },
+              _ => {},
+            }
           },
           _ => {},
-        }
-        for component in self.components.iter_mut() {
-          if let Some(action) = component.handle_events(Some(e.clone()))? {
-            action_tx.send(action)?;
-          }
+          // Mode::Insert => match e {
+          //   tui::Event::Key(key) => match key.code {
+          //     crossterm::event::KeyCode::Esc => self.mode = Mode::Command,
+          //     _ => {
+          //       for component in self.components.iter_mut() {
+          //         if let Some(action) = component.handle_events(Some(e.clone()))? {
+          //           action_tx.send(action)?;
+          //         }
+          //         action_tx.send(Action::Render)?;
+          //       }
+          //     },
+          //   },
+          //   event => {
+          //     log::info!("Received unkown event {event:?}");
+          //   },
+          // },
         }
       }
 

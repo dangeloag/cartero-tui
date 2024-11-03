@@ -1,0 +1,77 @@
+{
+  "env": {
+    "refresh_jwt": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImlzcyI6Ik5ldHN1cmlvbiIsImV4cCI6MTY4NDg2NjM2NSwiaWF0IjoxNjg0NzcyNzY1fQ.en8G-TrnDUL6tDcBpc0GInwRJybR4vmWT5VlXRYX5sE",
+    "jwt": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoiZ29rdUBsb2NhbC5jb20iLCJ1c2VySWQiOjEsImZpcnN0TmFtZSI6Ikdva3UiLCJsYXN0TmFtZSI6IkciLCJhdXRoUHJvdmlkZXJJZCI6MCwidXNlclBlcm1pc3Npb25zIjpudWxsLCJpc3MiOiJOZXRzdXJpb24iLCJleHAiOjE2ODQ4NTkxNjUsImlhdCI6MTY4NDc3Mjc2NX0.wpB8BnSHOTHkmZ9AhN7ydhtZdnRXg7eeSjHynMIRcr4"
+  },
+  "servers": {
+    "value": [
+      "https://echo.free.beeceptor.com"
+    ],
+    "active": 0
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "server": "https://echo.free.beeceptor.com",
+      "path": "/experiences/{id}/cancel",
+      "query": "id=jkfdjaf\nbase=yup",
+      "payload": "{\n\"email\": \"goku@local.com\",\n\"password\": \"123456\"\n}",
+      "headers": "",
+      "parsing_rules": "jwt -> /token\nrefresh_jwt -> /refresh_token\n"
+    },
+    {
+      "method": "GET",
+      "server": "http://localhost/api",
+      "path": "/groups",
+      "query": "",
+      "payload": "\n",
+      "headers": "Authorization: Bearer {{jwt}}",
+      "parsing_rules": "age -> /jwt\n"
+    },
+    {
+      "method": "GET",
+      "server": "http://localhost/api",
+      "path": "/groups/2",
+      "query": "",
+      "payload": "",
+      "headers": "authorization: Bearer {{jwt}}\n",
+      "parsing_rules": ""
+    },
+    {
+      "method": "POST",
+      "server": "http://localhost/api",
+      "path": "/groups/1/user-auth-invitations",
+      "query": "",
+      "payload": "{\n\"email\":\"dguanipa+nothere@wizards.us\",\n\"groupId\":1,\n\"roleId\":1,\n\"expiry\":\"2023-05-18T00:00:00-05:00\",\n\"providerId\":0\n}\n",
+      "headers": "authorization: Bearer {{jwt}}",
+      "parsing_rules": ""
+    },
+    {
+      "method": "GET",
+      "server": "http://localhost",
+      "path": "",
+      "query": "",
+      "payload": "",
+      "headers": "",
+      "parsing_rules": ""
+    },
+    {
+      "method": "GET",
+      "server": "http://localhost",
+      "path": "",
+      "query": "",
+      "payload": "",
+      "headers": "",
+      "parsing_rules": ""
+    },
+    {
+      "method": "GET",
+      "server": "http://localhost",
+      "path": "",
+      "query": "",
+      "payload": "",
+      "headers": "",
+      "parsing_rules": ""
+    }
+  ]
+}
