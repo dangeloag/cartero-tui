@@ -13,6 +13,10 @@ pub trait Subcomponent {
   }
 
   fn handle_key_events(&mut self, key: KeyEvent) {
+    self.handle_default_key_events(key);
+  }
+
+  fn handle_default_key_events(&mut self, key: KeyEvent) {
     match key {
       KeyEvent { modifiers: KeyModifiers::CONTROL, code: KeyCode::Char('u'), kind: _, state: _ } => {
         if let Some(value) = self.get_value_mut() {
@@ -32,6 +36,8 @@ pub trait Subcomponent {
       _ => {},
     }
   }
+
+  fn handle_normal_key_events(&mut self, key: KeyEvent) {}
 
   fn get_style(&self, is_focused: bool) -> Style {
     match is_focused {

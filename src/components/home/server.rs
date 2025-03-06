@@ -1,4 +1,5 @@
 use crate::components::home::UserInput;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{prelude::*, widgets::*};
 
 use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
@@ -65,6 +66,14 @@ impl Subcomponent for Server {
 
   fn get_value(&self) -> Option<&String> {
     Some(&self.value)
+  }
+
+  fn handle_normal_key_events(&mut self, key: KeyEvent) {
+    match key {
+      KeyEvent { modifiers: _, code: KeyCode::Char('m'), kind: _, state: _ } => self.method = self.method.next(),
+      KeyEvent { modifiers: _, code: KeyCode::Char('M'), kind: _, state: _ } => self.method = self.method.previous(),
+      _ => {},
+    }
   }
 }
 

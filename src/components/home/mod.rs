@@ -51,6 +51,12 @@ pub enum Mode {
   Processing,
 }
 
+#[derive(Default, Clone)]
+struct ReqResponse {
+  headers: String,
+  body: String,
+}
+
 #[derive(Default)]
 pub struct Home {
   pub show_help: bool,
@@ -60,8 +66,8 @@ pub struct Home {
   pub mode: Mode,
   pub input: Input,
   pub action_tx: Option<UnboundedSender<Action>>,
-  pub tx: Option<mpsc::Sender<String>>,
-  pub rx: Option<mpsc::Receiver<String>>,
+  pub tx: Option<mpsc::Sender<ReqResponse>>,
+  pub rx: Option<mpsc::Receiver<ReqResponse>>,
   pub keymap: HashMap<KeyEvent, Action>,
   pub text: Vec<String>,
   pub last_events: Vec<KeyEvent>,
@@ -129,43 +135,16 @@ impl Home {
   fn process_request(&mut self) {
     let response_result = self.send_request();
     match response_result {
-      Ok(response_text) => {
-        // TODO: get headers here
-        //self.app_output.response_headers =
-        //  format!("{:?}", response.headers()).replace("\",", "\n").replace("{", " ").replace("}", "");
-        let buf = Vec::new();
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(b"    ");
-        let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
-        //let response_text = r#"{"hello": "world"}"#;
-        let json_result: Result<Value, _> = serde_json::from_str(&response_text);
-        if let Ok(json) = json_result {
-          json.serialize(&mut ser).unwrap();
-          self.app_output.response_payload = String::from_utf8(ser.into_inner()).unwrap();
-        } else {
-          self.app_output.response_payload = String::from(response_text.clone())
-        }
-        self.app_output.response_payload_last = self.app_output.response_payload.clone();
-        let parsin_rules = parse_rules(&self.user_input.parsing_rules[..]);
-
-        //for rule in parsin_rules {
-        //  match serde_json::from_str::<Value>(&response_text[..]) {
-        //    Ok(json_value) => {
-        //      if let Some(field_value) = json_value.pointer(&rule.1[..]) {
-        //        self.local_storage.env.insert(rule.0, field_value.clone().as_str().unwrap().into());
-        //        write_db(self.local_storage.clone());
-        //      }
-        //    },
-        //    _ => (),
-        //  }
-        //}
+      Ok(req_response) => {
+        self.request_response.set_response(req_response);
       },
       Err(shoot) => {
-        self.app_output.response_payload = shoot.to_string();
+        panic!("ahhhh")
       },
     }
   }
 
-  fn send_request(&self) -> Result<String, Box<dyn std::error::Error>> {
+  fn send_request(&self) -> Result<ReqResponse, Box<dyn std::error::Error>> {
     let tx = self.tx.clone().unwrap();
     let query = parse_query(&self.querystring.get_value().unwrap()).unwrap();
     let url = format!("{}{}?{}", &self.server.get_value().unwrap(), &self.path.get_value().unwrap(), query);
@@ -189,13 +168,15 @@ impl Home {
       }
 
       let response_result = req_builder.unwrap().send();
-      //match response.unwrap().text() {
       match response_result {
-        Ok(response) => match response.text() {
-          Ok(text) => tx.send(text).unwrap(),
-          Err(err) => tx.send(err.to_string()).unwrap(),
+        Ok(response) => {
+          let headers = format!("{:?}", response.headers()).replace("\",", "\n").replace("{", " ").replace("}", "");
+          match response.text() {
+            Ok(text) => tx.send(ReqResponse { body: text, headers }).unwrap(),
+            Err(err) => tx.send(ReqResponse { body: err.to_string(), headers }).unwrap(),
+          }
         },
-        Err(err) => tx.send(err.to_string()).unwrap(),
+        Err(err) => tx.send(ReqResponse { body: err.to_string(), headers: String::from("") }).unwrap(),
       }
     });
 
@@ -267,21 +248,20 @@ impl Component for Home {
         KeyEvent { modifiers: _, code: KeyCode::Enter, kind: _, state: _ } => {
           self.process_request();
         },
+        KeyEvent { modifiers: _, code: KeyCode::Char('i'), kind: _, state: _ } => self.mode = Mode::Insert,
+        KeyEvent { modifiers: _, code: KeyCode::Char('q'), kind: _, state: _ } => {
+          // TODO: figure out config stuff
+          // if let Some(config) = self.config {
+          //   if let Some(keymap) = config.keybindings.get(&self.mode) {
+          //     if let Some(action) = keymap.get(&vec![key.clone()]) {
+          //       return Ok(Some(action.clone()));
+          //     }
+          //   }
+          // }
+          return Ok(Some(Action::Quit));
+        },
         KeyEvent { modifiers: _, code: KeyCode::Char(c), kind: _, state: _ } => {
-          if c == 'i' {
-            self.mode = Mode::Insert
-          }
-          if c == 'q' {
-            // TODO: figure out config stuff
-            // if let Some(config) = self.config {
-            //   if let Some(keymap) = config.keybindings.get(&self.mode) {
-            //     if let Some(action) = keymap.get(&vec![key.clone()]) {
-            //       return Ok(Some(action.clone()));
-            //     }
-            //   }
-            // }
-            return Ok(Some(Action::Quit));
-          }
+          self.get_active_widget().handle_normal_key_events(key)
         },
         KeyEvent { modifiers: _, code: KeyCode::Tab, kind: _, state: _ } => {
           self.focus_next_widget();
@@ -292,6 +272,9 @@ impl Component for Home {
         _ => {},
       },
       Mode::Insert => match key {
+        KeyEvent { modifiers: _, code: KeyCode::Enter, kind: _, state: _ } => {
+          self.process_request();
+        },
         KeyEvent { modifiers: _, code: KeyCode::Esc, kind: _, state: _ } => self.mode = Mode::Normal,
         _ => self.get_active_widget().handle_key_events(key),
       },
@@ -442,13 +425,7 @@ impl Component for Home {
 
     let _ = self.headers.draw(f, request_data_chunk[2], is_focused(self.active_widget, MenuItem::Headers));
 
-    let _ = self.request_response.draw(
-      f,
-      request_chunk[2],
-      footer,
-      &self.app_output,
-      is_focused(self.active_widget, MenuItem::JsonPath),
-    );
+    let _ = self.request_response.draw(f, request_chunk[2], footer, is_focused(self.active_widget, MenuItem::JsonPath));
 
     if self.popup {
       let requests_list2 = render_popup(&self.local_storage.servers.value, &self.user_input);
@@ -944,80 +921,4 @@ fn is_editable(item: MenuItem) -> bool {
     MenuItem::JsonPath => true,
     _ => false,
   }
-}
-
-fn parse_with_serde(app_output: &mut AppOutput, user_input: &mut UserInput) {
-  match serde_json::from_str::<Value>(&app_output.response_payload_last) {
-    Ok(json_value) => {
-      if let Some(field_value) = json_value.pointer(user_input.get_active()) {
-        let field_str = match field_value {
-          Value::Number(n) => {
-            if n.is_u64() {
-              n.as_u64().unwrap().to_string()
-            } else if n.is_i64() {
-              n.as_i64().unwrap().to_string()
-            } else if n.is_f64() {
-              n.as_f64().unwrap().to_string()
-            } else {
-              "".to_string()
-            }
-          },
-          Value::String(s) => s.to_string(),
-          Value::Null => "null".to_string(),
-          Value::Bool(b) => b.to_string(),
-          _ => field_value.to_string(),
-        };
-        app_output.response_payload = field_str;
-      } else {
-        app_output.response_payload = app_output.response_payload_last.clone();
-      }
-    },
-    _ => (),
-  }
-
-  // match serde_json::from_str::<Value>(&app_output.response_payload_last) {
-  //     Ok(json_value) => {
-  //         if let Some(field_value) =
-  //             json_value.pointer(user_input.get_active())
-  //         {
-  //             app_output.response_payload =
-  //                 field_value.as_str().unwrap_or_else(|| "".into()).into();
-  //         } else {
-  //             app_output.response_payload =
-  //                 app_output.response_payload_last.clone();
-  //         }
-  //     }
-  //     _ => (),
-  // }
-}
-
-fn parse_with_jq(app_output: &mut AppOutput, user_input: &mut UserInput, log_file: &mut File) {
-  let filter = &user_input.json_path;
-  let jq_cmd = format!("echo -E '{}' | jq '{}'", app_output.response_payload_last, filter);
-
-  // log_message(log_file, &jq_cmd);
-  let filtered_str =
-    Command::new("bash").arg("-c").arg(jq_cmd).stdin(Stdio::null()).stderr(Stdio::piped()).output().unwrap();
-
-  // Check if there was an error with the jq command
-  if !filtered_str.status.success() {
-    app_output.response_payload = app_output.response_payload_last.clone();
-    log_message(log_file, &String::from_utf8(filtered_str.stderr).unwrap());
-    // log_message(
-    //     log_file,
-    //     &format!(
-    //         "Filter: {}\nRequest: {}",
-    //         filter,
-    //         app_output.response_payload_last.clone()
-    //     ),
-    // );
-  } else {
-    let filtered_response_str = String::from_utf8(filtered_str.stdout).unwrap();
-    app_output.response_payload = filtered_response_str;
-  }
-}
-
-fn log_message(log_file: &mut File, message: &str) {
-  let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-  writeln!(log_file, "{} - {}", timestamp, message).unwrap();
 }

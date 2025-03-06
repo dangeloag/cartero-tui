@@ -1,11 +1,13 @@
-use std::path::PathBuf;
+use std::{fs::File, path::PathBuf};
 
 use color_eyre::eyre::Result;
 use directories::ProjectDirs;
 use lazy_static::lazy_static;
-use tracing::error;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{self, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, Layer};
+
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::FmtSubscriber;
 
 pub static GIT_COMMIT_HASH: &'static str = env!("RATATUI_COUNTER_GIT_INFO");
 
@@ -94,24 +96,19 @@ pub fn get_config_dir() -> PathBuf {
 }
 
 pub fn initialize_logging() -> Result<()> {
-  let directory = get_data_dir();
-  std::fs::create_dir_all(directory.clone())?;
-  let log_path = directory.join(LOG_FILE.clone());
-  let log_file = std::fs::File::create(log_path)?;
-  std::env::set_var(
-    "RUST_LOG",
-    std::env::var("RUST_LOG")
-      .or_else(|_| std::env::var(LOG_ENV.clone()))
-      .unwrap_or_else(|_| format!("{}=info", env!("CARGO_CRATE_NAME"))),
-  );
-  let file_subscriber = tracing_subscriber::fmt::layer()
-    .with_file(true)
-    .with_line_number(true)
-    .with_writer(log_file)
-    .with_target(false)
-    .with_ansi(false)
-    .with_filter(tracing_subscriber::filter::EnvFilter::from_default_env());
-  tracing_subscriber::registry().with(file_subscriber).with(ErrorLayer::default()).init();
+  let log_file = File::create("app.log").expect("Failed to create log file");
+
+  // 2. Configure the subscriber to write to the file.
+  let subscriber = FmtSubscriber::builder()
+        .with_writer(move || log_file.try_clone().unwrap()) // Clone for each log.
+        .with_max_level(tracing::Level::DEBUG) // Set desired log level.
+        .finish();
+
+  // 3. Set the global subscriber.
+  tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+
+  // 4. Use the logging macros.
+  info!("Application started");
   Ok(())
 }
 
