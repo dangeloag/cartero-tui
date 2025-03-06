@@ -36,8 +36,12 @@ impl Path {
 }
 
 impl Subcomponent for Path {
-  fn get_value_mut(&mut self) -> &mut String {
-    &mut self.value
+  fn get_value(&self) -> Option<&String> {
+    Some(&self.value)
+  }
+
+  fn get_value_mut(&mut self) -> Option<&mut String> {
+    Some(&mut self.value)
   }
 
   fn set_cursor(&self, f: &mut Frame<'_>, rect: Rect, input: &str) {

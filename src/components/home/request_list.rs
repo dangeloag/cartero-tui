@@ -63,7 +63,11 @@ fn render_reqs<'a>(user_reqs: &Vec<CRequest>, user_input: &UserInput, style: Sty
 }
 
 impl Subcomponent for RequestList {
-  fn get_value_mut(&mut self) -> &mut String {
-    todo!()
+  fn get_value_mut(&mut self) -> Option<&mut String> {
+    None
+  }
+
+  fn get_value(&self) -> Option<&String> {
+    None
   }
 }

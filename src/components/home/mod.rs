@@ -60,15 +60,15 @@ pub struct Home {
   pub mode: Mode,
   pub input: Input,
   pub action_tx: Option<UnboundedSender<Action>>,
-  pub tx: Option<mpsc::Sender<Result<reqwest::blocking::Response, reqwest::Error>>>,
-  pub rx: Option<mpsc::Receiver<Result<reqwest::blocking::Response, reqwest::Error>>>,
+  pub tx: Option<mpsc::Sender<String>>,
+  pub rx: Option<mpsc::Receiver<String>>,
   pub keymap: HashMap<KeyEvent, Action>,
   pub text: Vec<String>,
   pub last_events: Vec<KeyEvent>,
   pub req_list_state: ListState,
   pub server_list_state: ListState,
-  pub servers: Servers,
-  pub user_req: CRequest,
+  //pub servers: Servers,
+  //pub user_req: CRequest,
   pub user_input: UserInput,
   pub app_output: AppOutput,
   pub popup: bool,
@@ -115,6 +115,7 @@ impl Home {
     match self.active_widget {
       MenuItem::Server => &mut self.server,
       MenuItem::Path => &mut self.path,
+      MenuItem::Requests => &mut self.request_list,
       MenuItem::Query => &mut self.querystring,
       MenuItem::Payload => &mut self.payload,
       MenuItem::Headers => &mut self.headers,
@@ -128,35 +129,35 @@ impl Home {
   fn process_request(&mut self) {
     let response_result = self.send_request();
     match response_result {
-      Ok(response) => {
-        self.app_output.response_headers =
-          format!("{:?}", response.headers()).replace("\",", "\n").replace("{", " ").replace("}", "");
+      Ok(response_text) => {
+        // TODO: get headers here
+        //self.app_output.response_headers =
+        //  format!("{:?}", response.headers()).replace("\",", "\n").replace("{", " ").replace("}", "");
         let buf = Vec::new();
         let formatter = serde_json::ser::PrettyFormatter::with_indent(b"    ");
         let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
-        // let response_text = &response.text().expect("Valid text response");
-        let response_text = r#"{"hello": "world"}"#;
+        //let response_text = r#"{"hello": "world"}"#;
         let json_result: Result<Value, _> = serde_json::from_str(&response_text);
         if let Ok(json) = json_result {
           json.serialize(&mut ser).unwrap();
           self.app_output.response_payload = String::from_utf8(ser.into_inner()).unwrap();
         } else {
-          self.app_output.response_payload = String::from(response_text)
+          self.app_output.response_payload = String::from(response_text.clone())
         }
         self.app_output.response_payload_last = self.app_output.response_payload.clone();
         let parsin_rules = parse_rules(&self.user_input.parsing_rules[..]);
 
-        for rule in parsin_rules {
-          match serde_json::from_str::<Value>(response_text) {
-            Ok(json_value) => {
-              if let Some(field_value) = json_value.pointer(&rule.1[..]) {
-                self.local_storage.env.insert(rule.0, field_value.clone().as_str().unwrap().into());
-                write_db(self.local_storage.clone());
-              }
-            },
-            _ => (),
-          }
-        }
+        //for rule in parsin_rules {
+        //  match serde_json::from_str::<Value>(&response_text[..]) {
+        //    Ok(json_value) => {
+        //      if let Some(field_value) = json_value.pointer(&rule.1[..]) {
+        //        self.local_storage.env.insert(rule.0, field_value.clone().as_str().unwrap().into());
+        //        write_db(self.local_storage.clone());
+        //      }
+        //    },
+        //    _ => (),
+        //  }
+        //}
       },
       Err(shoot) => {
         self.app_output.response_payload = shoot.to_string();
@@ -164,13 +165,13 @@ impl Home {
     }
   }
 
-  fn send_request(&self) -> Result<reqwest::blocking::Response, Box<dyn std::error::Error>> {
+  fn send_request(&self) -> Result<String, Box<dyn std::error::Error>> {
     let tx = self.tx.clone().unwrap();
-    let query = parse_query(&self.user_input.query).unwrap();
-    let url = format!("{}{}?{}", &self.user_input.server, &self.user_input.path, query);
+    let query = parse_query(&self.querystring.get_value().unwrap()).unwrap();
+    let url = format!("{}{}?{}", &self.server.get_value().unwrap(), &self.path.get_value().unwrap(), query);
     let headers: HeaderMap = self.parse_headers().unwrap();
-    let method = self.user_input.method.clone();
-    let payload: String = self.user_input.payload.clone();
+    let method = self.server.get_method().clone();
+    let payload: String = self.payload.get_value().unwrap().clone();
 
     spawn_blocking(move || {
       let client = reqwest::blocking::Client::new();
@@ -187,17 +188,21 @@ impl Home {
         },
       }
 
-      let response = req_builder.unwrap().send();
-      tx.send(response).unwrap(); // Send text to the channel
+      let response_result = req_builder.unwrap().send();
+      //match response.unwrap().text() {
+      match response_result {
+        Ok(response) => match response.text() {
+          Ok(text) => tx.send(text).unwrap(),
+          Err(err) => tx.send(err.to_string()).unwrap(),
+        },
+        Err(err) => tx.send(err.to_string()).unwrap(),
+      }
     });
 
     loop {
       let message = self.rx.as_ref().unwrap().try_recv();
       match message {
-        Ok(msg) => match msg {
-          Ok(res) => return Ok(res),
-          Err(err) => return Err(Box::from(format!("Failed reuest with error: {}", err))),
-        },
+        Ok(msg) => return Ok(msg),
         Err(mpsc::TryRecvError::Empty) => thread::sleep(time::Duration::from_millis(100)),
         Err(mpsc::TryRecvError::Disconnected) => {
           panic!("Disconnected ")
@@ -207,7 +212,7 @@ impl Home {
   }
 
   fn parse_headers(&self) -> Result<HeaderMap, Box<dyn std::error::Error>> {
-    let headers = &self.user_input.headers;
+    let headers = &self.headers.get_value().unwrap();
     if headers.len() == 0 {
       return Ok(HeaderMap::new());
     }
@@ -397,7 +402,7 @@ impl Component for Home {
           // Constraint::Length(self.user_input.method.to_string().len() as u16 + 10),
           Constraint::Length(10 as u16 + 10),
           // Constraint::Length(self.user_input.server.len() as u16 + 2),
-          Constraint::Length(self.server.get_value_mut().len() as u16 + 2),
+          Constraint::Length(self.server.get_value_mut().unwrap().len() as u16 + 2),
           Constraint::Min(50),
         ]
         .as_ref(),

@@ -35,7 +35,11 @@ impl Headers {
 }
 
 impl Subcomponent for Headers {
-  fn get_value_mut(&mut self) -> &mut String {
-    &mut self.value
+  fn get_value_mut(&mut self) -> Option<&mut String> {
+    Some(&mut self.value)
+  }
+
+  fn get_value(&self) -> Option<&String> {
+    Some(&self.value)
   }
 }

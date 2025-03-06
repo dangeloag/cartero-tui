@@ -47,14 +47,24 @@ impl Server {
   }
 }
 
+impl Server {
+  pub fn get_method(&self) -> HttpMethod {
+    self.method
+  }
+}
+
 impl Subcomponent for Server {
-  fn get_value_mut(&mut self) -> &mut String {
-    &mut self.value
+  fn get_value_mut(&mut self) -> Option<&mut String> {
+    Some(&mut self.value)
   }
 
   fn set_cursor(&self, f: &mut Frame<'_>, rect: Rect, input: &str) {
     let (x_offset, y_offset) = super::parse_coord(input);
     f.set_cursor(rect.x + x_offset as u16 - 1, rect.y + y_offset as u16);
+  }
+
+  fn get_value(&self) -> Option<&String> {
+    Some(&self.value)
   }
 }
 
