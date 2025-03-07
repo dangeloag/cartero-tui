@@ -1,24 +1,29 @@
-use crate::components::home::UserInput;
 use ratatui::{prelude::*, widgets::*};
 
 use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
+use crate::repository::local_storage::{self, LocalStorageRepository};
 use color_eyre::eyre::Result;
+use std::sync::{Arc, Mutex}; // Assuming UserInput is in crate root
 
 #[derive(Default)]
 pub struct Path {
-  value: String,
+  repository: Arc<Mutex<LocalStorageRepository>>,
 }
 
 impl Path {
-  pub fn new() -> Self {
-    Path { value: String::from("") }
+  pub fn new(repo: Arc<Mutex<LocalStorageRepository>>) -> Self {
+    let path = Path { repository: repo };
+    path
+  }
+
+  pub fn get_value(&self) -> String {
+    self.repository.lock().unwrap().get_path()
   }
 
   pub fn draw(&self, f: &mut Frame<'_>, path_rect: Rect, is_focused: bool) -> Result<()> {
-    let path = Paragraph::new(AsRef::<str>::as_ref(&self.value))
-      .style(Style::default().fg(Color::LightCyan))
-      .alignment(Alignment::Left)
-      .block(
+    let repo = self.repository.lock().unwrap();
+    let path =
+      Paragraph::new(repo.get_path()).style(Style::default().fg(Color::LightCyan)).alignment(Alignment::Left).block(
         Block::default()
           .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
           .style(self.get_style(is_focused))
@@ -28,7 +33,7 @@ impl Path {
     f.render_widget(path, path_rect);
 
     if is_focused {
-      self.set_cursor(f, path_rect, &self.value);
+      self.set_cursor(f, path_rect, &repo.get_path());
     }
 
     Ok(())
@@ -36,16 +41,23 @@ impl Path {
 }
 
 impl Subcomponent for Path {
-  fn get_value(&self) -> Option<&String> {
-    Some(&self.value)
-  }
-
-  fn get_value_mut(&mut self) -> Option<&mut String> {
-    Some(&mut self.value)
-  }
-
   fn set_cursor(&self, f: &mut Frame<'_>, rect: Rect, input: &str) {
     let (x_offset, y_offset) = super::parse_coord(input);
     f.set_cursor(rect.x + x_offset as u16 - 1, rect.y + y_offset as u16);
+  }
+
+  fn push(&mut self, c: char) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.push_to_path(c);
+  }
+
+  fn pop(&mut self) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.pop_path();
+  }
+
+  fn clear(&mut self) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.clear_path();
   }
 }

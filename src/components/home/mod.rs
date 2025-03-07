@@ -11,7 +11,13 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{
+  collections::HashMap,
+  str::FromStr,
+  sync::{Arc, Mutex},
+  thread,
+  time::Duration,
+};
 use std::{
   fs,
   fs::File,
@@ -32,7 +38,10 @@ use tracing::trace;
 use tui_input::{backend::crossterm::EventHandler, Input};
 
 use super::{Component, Frame};
-use crate::{action::Action, config::key_event_to_string};
+use crate::{
+  action::Action,
+  repository::local_storage::{self, LocalStorageRepository},
+};
 
 mod headers;
 mod path;
@@ -40,7 +49,7 @@ mod payload;
 mod querystring;
 mod request_list;
 mod request_response;
-mod server;
+pub(crate) mod server;
 mod subcomponent;
 
 #[derive(Default, Copy, Clone, PartialEq, Eq)]
@@ -71,14 +80,13 @@ pub struct Home {
   pub keymap: HashMap<KeyEvent, Action>,
   pub text: Vec<String>,
   pub last_events: Vec<KeyEvent>,
-  pub req_list_state: ListState,
   pub server_list_state: ListState,
+  pub repository: Arc<Mutex<LocalStorageRepository>>,
   //pub servers: Servers,
   //pub user_req: CRequest,
-  pub user_input: UserInput,
-  pub app_output: AppOutput,
+  //pub user_input: UserInput,
+  //pub app_output: AppOutput,
   pub popup: bool,
-  pub local_storage: LocalStorage,
   pub parsing_rules_popup: bool,
 
   pub config: Option<crate::config::Config>,
@@ -93,12 +101,26 @@ pub struct Home {
 }
 
 impl Home {
-  pub fn new() -> Self {
-    let mut home = Self::default();
+  pub fn new(repository: Arc<Mutex<LocalStorageRepository>>) -> Self {
     let (tx, rx) = mpsc::channel();
-    home.tx = Some(tx);
-    home.rx = Some(rx);
-    home
+    let server = server::Server::new(Arc::clone(&repository));
+    let path = path::Path::new(Arc::clone(&repository));
+    let querystring = querystring::Query::new(Arc::clone(&repository));
+    let payload = payload::Payload::new(Arc::clone(&repository));
+    let headers = headers::Headers::new(Arc::clone(&repository));
+    let request_list = request_list::RequestList::new(Arc::clone(&repository));
+    Home {
+      tx: Some(tx),
+      rx: Some(rx),
+      repository,
+      server,
+      path,
+      request_list,
+      querystring,
+      payload,
+      headers,
+      ..Default::default()
+    }
   }
 
   pub fn keymap(mut self, keymap: HashMap<KeyEvent, Action>) -> Self {
@@ -146,11 +168,11 @@ impl Home {
 
   fn send_request(&self) -> Result<ReqResponse, Box<dyn std::error::Error>> {
     let tx = self.tx.clone().unwrap();
-    let query = parse_query(&self.querystring.get_value().unwrap()).unwrap();
-    let url = format!("{}{}?{}", &self.server.get_value().unwrap(), &self.path.get_value().unwrap(), query);
+    let query = parse_query(&self.querystring.get_value()).unwrap();
+    let url = format!("{}{}?{}", &self.server.get_value(), &self.path.get_value(), query);
     let headers: HeaderMap = self.parse_headers().unwrap();
     let method = self.server.get_method().clone();
-    let payload: String = self.payload.get_value().unwrap().clone();
+    let payload: String = self.payload.get_value();
 
     spawn_blocking(move || {
       let client = reqwest::blocking::Client::new();
@@ -193,11 +215,13 @@ impl Home {
   }
 
   fn parse_headers(&self) -> Result<HeaderMap, Box<dyn std::error::Error>> {
-    let headers = &self.headers.get_value().unwrap();
+    let headers = self.headers.get_value();
     if headers.len() == 0 {
       return Ok(HeaderMap::new());
     }
-    let headers_with_env = replace_env_variables(headers, &self.local_storage.env).clone();
+    // TODO: fix this
+    //let headers_with_env = replace_env_variables(headers, &self.local_storage.env).clone();
+    let headers_with_env = headers.clone();
     let new_headers = Regex::new("\n+$").unwrap().replace_all(&headers_with_env, "");
     // TODO: move regex compiltion out  of function
     let valid_format = Regex::new(r"^((?>[^:\n\s]+\s?:[^:\n]+)\n?)+$").unwrap().is_match(&headers).unwrap();
@@ -243,42 +267,41 @@ impl Component for Home {
   fn handle_key_events(&mut self, key: KeyEvent) -> Result<Option<Action>> {
     self.last_events.push(key.clone());
 
-    match self.mode {
-      Mode::Normal => match key {
-        KeyEvent { modifiers: _, code: KeyCode::Enter, kind: _, state: _ } => {
-          self.process_request();
+    match key {
+      // match global keybindings
+      KeyEvent { modifiers: KeyModifiers::CONTROL, code: KeyCode::Char('s'), kind: _, state: _ } => {
+        let repo = self.repository.lock().unwrap();
+        repo.save();
+      },
+      KeyEvent { modifiers: _, code: KeyCode::Tab, kind: _, state: _ } => self.focus_next_widget(),
+      KeyEvent { modifiers: _, code: KeyCode::BackTab, kind: _, state: _ } => self.focus_previous_widget(),
+      KeyEvent { modifiers: _, code: KeyCode::Enter, kind: _, state: _ } => self.process_request(),
+      _ => match self.mode {
+        // if no global match, match mode specific keybindings
+        Mode::Normal => match key {
+          KeyEvent { modifiers: _, code: KeyCode::Char('i'), kind: _, state: _ } => self.mode = Mode::Insert,
+          KeyEvent { modifiers: _, code: KeyCode::Char('q'), kind: _, state: _ } => {
+            // TODO: figure out config stuff
+            // if let Some(config) = self.config {
+            //   if let Some(keymap) = config.keybindings.get(&self.mode) {
+            //     if let Some(action) = keymap.get(&vec![key.clone()]) {
+            //       return Ok(Some(action.clone()));
+            //     }
+            //   }
+            // }
+            return Ok(Some(Action::Quit));
+          },
+          KeyEvent { modifiers: _, code: KeyCode::Char(c), kind: _, state: _ } => {
+            self.get_active_widget().handle_normal_key_events(key)
+          },
+          _ => {},
         },
-        KeyEvent { modifiers: _, code: KeyCode::Char('i'), kind: _, state: _ } => self.mode = Mode::Insert,
-        KeyEvent { modifiers: _, code: KeyCode::Char('q'), kind: _, state: _ } => {
-          // TODO: figure out config stuff
-          // if let Some(config) = self.config {
-          //   if let Some(keymap) = config.keybindings.get(&self.mode) {
-          //     if let Some(action) = keymap.get(&vec![key.clone()]) {
-          //       return Ok(Some(action.clone()));
-          //     }
-          //   }
-          // }
-          return Ok(Some(Action::Quit));
-        },
-        KeyEvent { modifiers: _, code: KeyCode::Char(c), kind: _, state: _ } => {
-          self.get_active_widget().handle_normal_key_events(key)
-        },
-        KeyEvent { modifiers: _, code: KeyCode::Tab, kind: _, state: _ } => {
-          self.focus_next_widget();
-        },
-        KeyEvent { modifiers: _, code: KeyCode::BackTab, kind: _, state: _ } => {
-          self.focus_previous_widget();
+        Mode::Insert => match key {
+          KeyEvent { modifiers: _, code: KeyCode::Esc, kind: _, state: _ } => self.mode = Mode::Normal,
+          _ => self.get_active_widget().handle_key_events(key),
         },
         _ => {},
       },
-      Mode::Insert => match key {
-        KeyEvent { modifiers: _, code: KeyCode::Enter, kind: _, state: _ } => {
-          self.process_request();
-        },
-        KeyEvent { modifiers: _, code: KeyCode::Esc, kind: _, state: _ } => self.mode = Mode::Normal,
-        _ => self.get_active_widget().handle_key_events(key),
-      },
-      _ => {},
     }
 
     // match key {
@@ -355,15 +378,6 @@ impl Component for Home {
   }
 
   fn draw(&mut self, f: &mut Frame<'_>, rect: Rect) -> Result<()> {
-    // let mut req_list_state = ListState::default();
-    // let mut server_list_state = ListState::default();
-    // let servers = read_db().unwrap().servers;
-    // req_list_state.select(Some(0));
-    // server_list_state.select(Some(servers.active));
-    // let (user_req, _) = load_requests();
-    // let mut user_input = UserInput::from(user_req);
-    let (_, user_requests) = load_requests();
-
     // divide the layout in:
     // header: method, server, path
     // body: request data
@@ -382,10 +396,8 @@ impl Component for Home {
       .direction(Direction::Horizontal)
       .constraints(
         [
-          // Constraint::Length(self.user_input.method.to_string().len() as u16 + 10),
           Constraint::Length(10 as u16 + 10),
-          // Constraint::Length(self.user_input.server.len() as u16 + 2),
-          Constraint::Length(self.server.get_value_mut().unwrap().len() as u16 + 2),
+          Constraint::Length(self.server.get_value().len() as u16 + 2),
           Constraint::Min(50),
         ]
         .as_ref(),
@@ -410,14 +422,7 @@ impl Component for Home {
 
     let _ = self.path.draw(f, path, is_focused(self.active_widget, MenuItem::Path));
 
-    let _ = self.request_list.draw(
-      f,
-      request_chunk[0],
-      &mut self.user_input,
-      &mut self.req_list_state,
-      &user_requests,
-      is_focused(self.active_widget, MenuItem::Requests),
-    );
+    let _ = self.request_list.draw(f, request_chunk[0], is_focused(self.active_widget, MenuItem::Requests));
 
     let _ = self.querystring.draw(f, request_data_chunk[0], is_focused(self.active_widget, MenuItem::Query));
 
@@ -427,70 +432,35 @@ impl Component for Home {
 
     let _ = self.request_response.draw(f, request_chunk[2], footer, is_focused(self.active_widget, MenuItem::JsonPath));
 
-    if self.popup {
-      let requests_list2 = render_popup(&self.local_storage.servers.value, &self.user_input);
-      let _ = Block::default().title("Popup").borders(Borders::ALL);
-      let area = centered_rect(60, 20, rect);
-      f.render_widget(Clear, area); //this clears out the background
-      f.render_stateful_widget(requests_list2, area, &mut self.server_list_state);
-      self.user_input.active_menu_item = MenuItem::ServerListPopup;
-    }
+    //if self.popup {
+    //  let requests_list2 = render_popup(&vec![], &self.user_input);
+    //  let _ = Block::default().title("Popup").borders(Borders::ALL);
+    //  let area = centered_rect(60, 20, rect);
+    //  f.render_widget(Clear, area); //this clears out the background
+    //  f.render_stateful_widget(requests_list2, area, &mut self.server_list_state);
+    //  self.user_input.active_menu_item = MenuItem::ServerListPopup;
+    //}
 
-    if self.parsing_rules_popup {
-      let _ = Block::default().title("Popup").borders(Borders::ALL);
-      let area = centered_rect(50, 30, rect);
-      let rules_text = Paragraph::new(AsRef::<str>::as_ref(&self.user_input.parsing_rules))
-        .style(Style::default().fg(Color::LightCyan))
-        .alignment(Alignment::Left)
-        .block(
-          Block::default()
-            .borders(Borders::ALL)
-            .style(focused_style(&self.user_input, MenuItem::ParsingRulesPopup))
-            .title("Parsing Rules")
-            .border_type(BorderType::Plain),
-        );
-
-      f.render_widget(Clear, area); //this clears out the background
-      f.render_widget(rules_text, area);
-      self.user_input.active_menu_item = MenuItem::ParsingRulesPopup;
-    }
+    //if self.parsing_rules_popup {
+    //  let _ = Block::default().title("Popup").borders(Borders::ALL);
+    //  let area = centered_rect(50, 30, rect);
+    //  let rules_text = Paragraph::new(AsRef::<str>::as_ref(&self.user_input.parsing_rules))
+    //    .style(Style::default().fg(Color::LightCyan))
+    //    .alignment(Alignment::Left)
+    //    .block(
+    //      Block::default()
+    //        .borders(Borders::ALL)
+    //        .style(focused_style(&self.user_input, MenuItem::ParsingRulesPopup))
+    //        .title("Parsing Rules")
+    //        .border_type(BorderType::Plain),
+    //    );
+    //  f.render_widget(Clear, area); //this clears out the background
+    //  f.render_widget(rules_text, area);
+    //  self.user_input.active_menu_item = MenuItem::ParsingRulesPopup;
+    //}
 
     Ok(())
   }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Servers {
-  value: Vec<String>,
-  active: usize,
-}
-
-impl Default for Servers {
-  fn default() -> Self {
-    read_db().unwrap().servers
-  }
-}
-
-impl Servers {
-  fn get_active(&self) -> &str {
-    &self.value[self.active]
-  }
-
-  fn update_active(&mut self, s: String) {
-    self.value[self.active] = s;
-  }
-
-  fn set_active(&mut self, idx: usize) {
-    // let idx = self.value.iter().position(|x| *x == s).unwrap_or(0);
-    self.active = idx;
-  }
-
-  fn add_server(&mut self, s: String) {
-    self.value.push(s.clone());
-    self.set_active(self.active + 1);
-  }
-
-  fn next(&mut self) {}
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -506,33 +476,33 @@ struct UserInput {
   active_menu_item: MenuItem,
 }
 
-impl From<CRequest> for UserInput {
-  fn from(c_req: CRequest) -> Self {
-    UserInput {
-      server: c_req.server,
-      path: c_req.path,
-      query: c_req.query,
-      payload: c_req.payload,
-      json_path: String::new(),
-      headers: c_req.headers,
-      parsing_rules: c_req.parsing_rules,
-      method: c_req.method,
-      active_menu_item: MenuItem::Server,
-    }
-  }
-}
+//impl From<RequestInput> for UserInput {
+//  fn from(c_req: RequestInput) -> Self {
+//    UserInput {
+//      server: c_req.server,
+//      path: c_req.path,
+//      query: c_req.query,
+//      payload: c_req.payload,
+//      json_path: String::new(),
+//      headers: c_req.headers,
+//      parsing_rules: c_req.parsing_rules,
+//      method: c_req.method,
+//      active_menu_item: MenuItem::Server,
+//    }
+//  }
+//}
 
-#[derive(Serialize, Deserialize, Clone)]
-struct CRequest {
-  method: server::HttpMethod,
-  server: String,
-  path: String,
-  query: String,
-  payload: String,
-  headers: String,
-  #[serde(default = "emtpy_string")]
-  parsing_rules: String,
-}
+//#[derive(Serialize, Deserialize, Clone)]
+//struct RequestInput {
+//  method: server::HttpMethod,
+//  server: String,
+//  path: String,
+//  query: String,
+//  payload: String,
+//  headers: String,
+//  #[serde(default = "emtpy_string")]
+//  parsing_rules: String,
+//}
 
 fn emtpy_string() -> String {
   String::from("")
@@ -542,91 +512,19 @@ fn default_env() -> HashMap<String, String> {
   HashMap::new()
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct LocalStorage {
-  #[serde(default = "default_env")]
-  env: HashMap<String, String>,
-  servers: Servers,
-  requests: Vec<CRequest>,
-}
-
-impl Default for LocalStorage {
-  fn default() -> Self {
-    read_db().unwrap()
-  }
-}
-
-impl From<UserInput> for CRequest {
-  fn from(user_input: UserInput) -> Self {
-    CRequest {
-      server: user_input.server,
-      path: user_input.path,
-      query: user_input.query,
-      payload: user_input.payload,
-      headers: user_input.headers,
-      method: user_input.method,
-      parsing_rules: user_input.parsing_rules,
-    }
-  }
-}
-
-impl Default for CRequest {
-  fn default() -> Self {
-    CRequest {
-      method: server::HttpMethod::GET,
-      server: String::from("http://localhost"),
-      path: String::new(),
-      query: String::new(),
-      payload: String::new(),
-      headers: String::new(),
-      parsing_rules: String::new(),
-    }
-  }
-}
-
-struct AppOutput {
-  response_headers: String,
-  response_payload: String,
-  response_payload_last: String,
-}
-
-impl Default for AppOutput {
-  fn default() -> Self {
-    AppOutput { response_headers: String::new(), response_payload: String::new(), response_payload_last: String::new() }
-  }
-}
-
-impl UserInput {
-  fn get_active(&mut self) -> &mut String {
-    match self.active_menu_item {
-      MenuItem::Server => &mut self.server,
-      MenuItem::Path => &mut self.path,
-      MenuItem::Query => &mut self.query,
-      MenuItem::Payload => &mut self.payload,
-      MenuItem::Headers => &mut self.headers,
-      MenuItem::ServerListPopup => &mut self.server,
-      MenuItem::ParsingRulesPopup => &mut self.parsing_rules,
-      MenuItem::JsonPath => &mut self.json_path,
-      _ => panic!("Not implemented"),
-    }
-  }
-}
-
-impl Default for UserInput {
-  fn default() -> Self {
-    UserInput {
-      method: server::HttpMethod::GET,
-      server: String::from("http://localhost"),
-      path: String::new(),
-      query: String::new(),
-      payload: String::new(),
-      json_path: String::new(),
-      headers: String::new(),
-      parsing_rules: String::new(),
-      active_menu_item: MenuItem::Server,
-    }
-  }
-}
+//impl From<UserInput> for RequestInput {
+//  fn from(user_input: UserInput) -> Self {
+//    RequestInput {
+//      server: user_input.server,
+//      path: user_input.path,
+//      query: user_input.query,
+//      payload: user_input.payload,
+//      headers: user_input.headers,
+//      method: user_input.method,
+//      parsing_rules: user_input.parsing_rules,
+//    }
+//  }
+//}
 
 #[derive(Default, Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 enum MenuItem {
@@ -688,22 +586,6 @@ impl From<usize> for MenuItem {
     }
   }
 }
-
-// fn extract_and_save_matching_result(
-//     word: &str,
-//     json_path: &str,
-//     results_map: &mut HashMap<String, String>,
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     let json_value: Value = serde_json::from_str(&response_body)?;
-//
-//     if let Some(field_value) = json_value.pointer(json_path).unwrap().as_str() {
-//         if field_value.contains(word) {
-//             results_map.insert(json_path.to_owned(), field_value.to_owned());
-//         }
-//     }
-//
-//     Ok(())
-// }
 
 fn parse_rules(rules: &str) -> Vec<(String, String)> {
   let rules_vec: Vec<&str> = rules.split('\n').collect();
@@ -770,46 +652,6 @@ fn replace_env_variables(input: &str, values: &HashMap<String, String>) -> Strin
   output
 }
 
-const DB_PATH: &str = "./cartero.json";
-
-fn default_config(_: std::io::Error) -> Result<String, Box<dyn std::error::Error>> {
-  Ok(String::from(
-    r#"
-    {
-    "env": {},
-     "servers": {
-         "value": ["http://localhost"],
-         "active": 0
-     },
-        "requests": [
-        {
-            "method": "GET",
-            "server": "",
-            "path": "",
-            "query": "",
-            "payload": "",
-            "headers": ""
-
-        }]
-    }"#,
-  ))
-}
-
-fn read_db() -> Result<LocalStorage, Box<dyn std::error::Error>> {
-  let db_content = fs::read_to_string(DB_PATH).or_else(default_config)?;
-  // let parsed: Vec<CRequest> = serde_json::from_str(&db_content)?;
-  let parsed: LocalStorage = serde_json::from_str(&db_content)?;
-  Ok(parsed)
-}
-
-fn load_requests() -> (CRequest, Vec<CRequest>) {
-  let req_list = read_db().expect("can fetch request list").requests;
-
-  let request = if req_list.len() > 0 { req_list.get(0).expect("exists").clone() } else { CRequest::default() };
-
-  (request, req_list)
-}
-
 fn render_popup<'a>(servers: &Vec<String>, user_input: &UserInput) -> List<'a> {
   let servers_block = Block::default()
     .borders(Borders::ALL)
@@ -841,50 +683,27 @@ fn render_popup<'a>(servers: &Vec<String>, user_input: &UserInput) -> List<'a> {
   list
 }
 
-fn add_request(_: &UserInput, data: &mut LocalStorage) {
-  let new_req = CRequest::default();
-  data.requests.push(new_req);
-  write_db(data.clone());
-}
-
-fn delete_request(_: &UserInput, data: &mut LocalStorage, req_list: &mut ListState) {
-  let selected_idx = req_list.selected().unwrap_or(0);
-  data.requests.remove(selected_idx);
-  if selected_idx == data.requests.len() {
-    req_list.select(Some(selected_idx - 1));
-  }
-  write_db(data.clone());
-}
-
-fn write_db(data: LocalStorage) {
-  let buf = Vec::new();
-  let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
-  let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
-  data.serialize(&mut ser).expect("Can be serialized");
-  fs::write(DB_PATH, ser.into_inner()).expect("Can write to database");
-}
-
-fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, servers: &Servers) {
-  user_input.method = new_sel.method;
-
-  user_input.server.drain(..);
-  user_input.server.push_str(servers.get_active());
-
-  user_input.path.drain(..);
-  user_input.path.push_str(&new_sel.path[..]);
-
-  user_input.query.drain(..);
-  user_input.query.push_str(&new_sel.query[..]);
-
-  user_input.payload.drain(..);
-  user_input.payload.push_str(&new_sel.payload[..]);
-
-  user_input.headers.drain(..);
-  user_input.headers.push_str(&new_sel.headers[..]);
-
-  user_input.parsing_rules.drain(..);
-  user_input.parsing_rules.push_str(&new_sel.parsing_rules[..]);
-}
+//fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, servers: &Servers) {
+//  user_input.method = new_sel.method;
+//
+//  user_input.server.drain(..);
+//  user_input.server.push_str(servers.get_active());
+//
+//  user_input.path.drain(..);
+//  user_input.path.push_str(&new_sel.path[..]);
+//
+//  user_input.query.drain(..);
+//  user_input.query.push_str(&new_sel.query[..]);
+//
+//  user_input.payload.drain(..);
+//  user_input.payload.push_str(&new_sel.payload[..]);
+//
+//  user_input.headers.drain(..);
+//  user_input.headers.push_str(&new_sel.headers[..]);
+//
+//  user_input.parsing_rules.drain(..);
+//  user_input.parsing_rules.push_str(&new_sel.parsing_rules[..]);
+//}
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

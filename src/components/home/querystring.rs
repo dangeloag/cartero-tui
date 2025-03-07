@@ -1,23 +1,28 @@
 use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
 use crate::components::home::UserInput;
+use crate::repository::local_storage::{self, LocalStorageRepository};
 use color_eyre::eyre::Result;
 use ratatui::{prelude::*, widgets::*}; // Assuming UserInput is in crate root
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub struct Query {
-  value: String,
+  repository: Arc<Mutex<LocalStorageRepository>>,
 }
 
 impl Query {
-  pub fn new() -> Self {
-    Query { value: String::from("") }
+  pub fn new(repository: Arc<Mutex<LocalStorageRepository>>) -> Self {
+    Query { repository }
+  }
+
+  pub fn get_value(&self) -> String {
+    self.repository.lock().unwrap().get_query()
   }
 
   pub fn draw(&self, f: &mut Frame<'_>, rect: Rect, is_focused: bool) -> Result<()> {
-    let query = Paragraph::new(AsRef::<str>::as_ref(&self.value))
-      .style(Style::default().fg(Color::LightCyan))
-      .alignment(Alignment::Left)
-      .block(
+    let repo = self.repository.lock().unwrap();
+    let query =
+      Paragraph::new(repo.get_query()).style(Style::default().fg(Color::LightCyan)).alignment(Alignment::Left).block(
         Block::default()
           .borders(Borders::ALL)
           .style(self.get_style(is_focused))
@@ -28,7 +33,7 @@ impl Query {
     f.render_widget(query, rect);
 
     if is_focused {
-      self.set_cursor(f, rect, &self.value);
+      self.set_cursor(f, rect, &repo.get_query());
     }
 
     Ok(())
@@ -36,11 +41,18 @@ impl Query {
 }
 
 impl Subcomponent for Query {
-  fn get_value_mut(&mut self) -> Option<&mut String> {
-    Some(&mut self.value)
+  fn push(&mut self, c: char) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.push_to_querystring(c);
   }
 
-  fn get_value(&self) -> Option<&String> {
-    Some(&self.value)
+  fn pop(&mut self) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.pop_querystring();
+  }
+
+  fn clear(&mut self) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.clear_querystring();
   }
 }

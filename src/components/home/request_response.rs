@@ -1,6 +1,9 @@
-use std::process::{Command, Stdio};
+use std::{
+  io::{Read, Write},
+  process::{Command, Stdio},
+};
 
-use super::{subcomponent::Subcomponent, AppOutput, CRequest, Component, Frame, MenuItem, ReqResponse};
+use super::{subcomponent::Subcomponent, Component, Frame, MenuItem, ReqResponse};
 use crate::components::home::UserInput;
 use color_eyre::eyre::Result;
 use ratatui::{prelude::*, widgets::*};
@@ -146,18 +149,29 @@ impl RequestResponse {
   }
 
   fn parse_with_jq(&mut self) {
-    let jq_cmd = format!("echo -E '{}' | jq '{}'", self.response_body_last, self.body_filter);
+    let mut child = Command::new("jq")
+            .arg(&self.body_filter) // <-- Pass the jq filter directly as an argument
+            .stdin(Stdio::piped())  // Provide input via stdin
+            .stdout(Stdio::piped()) // Capture stdout
+            .stderr(Stdio::null())  // Discard error output
+            .spawn()
+            .expect("Failed to start jq command");
 
-    // log_message(log_file, &jq_cmd);
-    let filtered_str =
-      Command::new("bash").arg("-c").arg(jq_cmd).stdin(Stdio::null()).stderr(Stdio::piped()).output().unwrap();
+    if let Some(mut stdin) = child.stdin.take() {
+      stdin.write_all(self.response_body_last.as_bytes()).expect("Failed to write to jq stdin");
+    }
 
-    // Check if there was an error with the jq command
-    if !filtered_str.status.success() {
-      self.response_body = self.response_body_last.clone();
+    let mut output = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+      stdout.read_to_string(&mut output).expect("Failed to read jq output");
+    }
+
+    let status = child.wait().expect("Failed to wait for jq process");
+
+    if status.success() {
+      self.response_body = output;
     } else {
-      let filtered_response_str = String::from_utf8(filtered_str.stdout).unwrap();
-      self.response_body = filtered_response_str;
+      self.response_body = self.response_body_last.clone();
     }
   }
 }
@@ -184,19 +198,26 @@ fn jq_is_installed() -> bool {
 }
 
 impl Subcomponent for RequestResponse {
-  fn get_value_mut(&mut self) -> Option<&mut String> {
-    Some(&mut self.body_filter)
-  }
+  //fn handle_key_events(&mut self, key: crossterm::event::KeyEvent) {
+  //  self.handle_default_key_events(key);
+  //  if self.jq_is_installed {
+  //    self.parse_with_jq();
+  //  }
+  //}
 
-  fn get_value(&self) -> Option<&String> {
-    Some(&self.body_filter)
-  }
-
-  fn handle_key_events(&mut self, key: crossterm::event::KeyEvent) {
-    self.handle_default_key_events(key);
+  fn push(&mut self, c: char) {
+    self.body_filter.push(c);
     if self.jq_is_installed {
       self.parse_with_jq();
     }
+  }
+
+  fn pop(&mut self) {
+    self.body_filter.pop();
+  }
+
+  fn clear(&mut self) {
+    self.body_filter.clear();
   }
 }
 

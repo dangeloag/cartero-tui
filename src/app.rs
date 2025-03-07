@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, mpsc as stdMpsc, Arc};
+use std::sync::{atomic::AtomicBool, mpsc as stdMpsc, Arc, Mutex};
 
 use color_eyre::eyre::Result;
 use crossterm::event::KeyEvent;
@@ -11,6 +11,7 @@ use crate::{
   action::Action,
   components::{fps::FpsCounter, home::Home, Component},
   config::Config,
+  repository::{self, local_storage::LocalStorageRepository},
   tui,
 };
 
@@ -30,11 +31,13 @@ pub struct App {
   pub mode: Mode,
   pub last_tick_key_events: Vec<KeyEvent>,
   pub vim_is_open: bool,
+  //pub repository: repository::local_storage::LocalStorageRepository,
 }
 
 impl App {
   pub fn new(tick_rate: f64, frame_rate: f64) -> Result<Self> {
-    let home = Home::new();
+    let repo = LocalStorageRepository::default();
+    let home = Home::new(Arc::new(Mutex::new(repo)));
     let fps = FpsCounter::new();
     let config = Config::new()?;
     let mode = Mode::Home;

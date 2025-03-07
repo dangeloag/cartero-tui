@@ -1,22 +1,23 @@
-use super::{subcomponent::Subcomponent, CRequest, Component, Frame, MenuItem, UserInput};
+use super::{subcomponent::Subcomponent, Component, Frame, MenuItem, UserInput};
+use crate::repository::local_storage::LocalStorageRepository;
 use color_eyre::eyre::Result;
-use ratatui::{prelude::*, widgets::*}; // Assuming UserInput is in crate root
+use ratatui::{prelude::*, widgets::*};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub struct Headers {
-  value: String,
+  repository: Arc<Mutex<LocalStorageRepository>>,
 }
 
 impl Headers {
-  pub fn new() -> Self {
-    Headers { value: "".to_string() }
+  pub fn new(repository: Arc<Mutex<LocalStorageRepository>>) -> Self {
+    Headers { repository }
   }
 
   pub fn draw(&self, f: &mut Frame<'_>, rect: Rect, is_focused: bool) -> Result<()> {
-    let headers = Paragraph::new(AsRef::<str>::as_ref(&self.value))
-      .style(Style::default().fg(Color::LightCyan))
-      .alignment(Alignment::Left)
-      .block(
+    let repo = self.repository.lock().unwrap();
+    let headers =
+      Paragraph::new(repo.get_headers()).style(Style::default().fg(Color::LightCyan)).alignment(Alignment::Left).block(
         Block::default()
           .borders(Borders::ALL)
           .style(self.get_style(is_focused))
@@ -27,19 +28,31 @@ impl Headers {
     f.render_widget(headers, rect);
 
     if is_focused {
-      self.set_cursor(f, rect, &self.value);
+      self.set_cursor(f, rect, &repo.get_headers());
     }
 
     Ok(())
   }
+
+  pub fn get_value(&self) -> String {
+    let repo = self.repository.lock().unwrap();
+    repo.get_headers()
+  }
 }
 
 impl Subcomponent for Headers {
-  fn get_value_mut(&mut self) -> Option<&mut String> {
-    Some(&mut self.value)
+  fn push(&mut self, c: char) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.push_to_headers(c);
   }
 
-  fn get_value(&self) -> Option<&String> {
-    Some(&self.value)
+  fn pop(&mut self) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.pop_headers();
+  }
+
+  fn clear(&mut self) {
+    let mut repo = self.repository.lock().unwrap();
+    repo.clear_headers();
   }
 }
