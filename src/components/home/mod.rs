@@ -183,8 +183,11 @@ impl Home {
         server::HttpMethod::POST => {
           req_builder = Some(client.post(url).headers(headers).body(payload));
         },
-        _ => {
-          panic!("Method not implemented")
+        server::HttpMethod::PUT => {
+          req_builder = Some(client.put(url).headers(headers).body(payload));
+        },
+        server::HttpMethod::DELETE => {
+          req_builder = Some(client.delete(url).headers(headers).body(payload));
         },
       }
 
