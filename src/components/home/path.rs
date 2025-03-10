@@ -1,6 +1,9 @@
 use ratatui::{prelude::*, widgets::*};
 
-use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
+use super::{
+  subcomponent::{parse_coord, Subcomponent},
+  Component, Frame, MenuItem,
+};
 use crate::repository::local_storage::{self, LocalStorageRepository};
 use color_eyre::eyre::Result;
 use std::sync::{Arc, Mutex}; // Assuming UserInput is in crate root
@@ -42,7 +45,7 @@ impl Path {
 
 impl Subcomponent for Path {
   fn set_cursor(&self, f: &mut Frame<'_>, rect: Rect, input: &str) {
-    let (x_offset, y_offset) = super::parse_coord(input);
+    let (x_offset, y_offset) = parse_coord(input);
     f.set_cursor(rect.x + x_offset as u16 - 1, rect.y + y_offset as u16);
   }
 

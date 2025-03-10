@@ -203,7 +203,6 @@ impl LocalStorageRepository {
 
 impl Default for LocalStorageRepository {
   fn default() -> Self {
-    // Use get_or_init to initialize the singleton within the default method
     debug!("Starting LocalStorageRepository");
     match fs::read_to_string(DB_PATH) {
       Ok(db_content) => match serde_json::from_str::<LocalStorageRepository>(&db_content) {
@@ -259,7 +258,6 @@ impl Requests {
   }
 
   fn set_active(&mut self, idx: usize) {
-    // let idx = self.value.iter().position(|x| *x == s).unwrap_or(0);
     self.active = idx;
   }
 
@@ -270,12 +268,9 @@ impl Requests {
   fn delete_active(&mut self) {
     self.value.remove(self.active);
 
-    // Adjust active index
     if self.value.is_empty() || self.active == 0 {
-      // If the list is empty after removal, set active to None or reset it
       self.active = 0;
     } else {
-      // If the last item was deleted, update the active index to the new last item
       self.active -= 1;
     }
   }
@@ -387,7 +382,6 @@ impl Servers {
   }
 
   fn set_active(&mut self, idx: usize) {
-    // let idx = self.value.iter().position(|x| *x == s).unwrap_or(0);
     self.active = idx;
   }
 
@@ -410,22 +404,6 @@ impl Servers {
     self.get_active_mut().clear();
   }
 }
-
-//fn read_db() -> LocalStorageRepository {
-//  match fs::read_to_string(DB_PATH) {
-//    Ok(db_content) => match serde_json::from_str::<LocalStorageRepository>(&db_content) {
-//      Ok(data) => data,
-//      Err(e) => {
-//        error!("{:?}", e);
-//        LocalStorageRepository::default()
-//      },
-//    },
-//    Err(e) => {
-//      error!("{:?}", e);
-//      LocalStorageRepository::default()
-//    },
-//  }
-//}
 
 use serde_json::to_string_pretty;
 

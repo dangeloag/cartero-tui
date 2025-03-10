@@ -1,4 +1,4 @@
-use super::{Component, Frame, MenuItem, UserInput};
+use super::{Component, Frame, MenuItem};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{prelude::*, widgets::*};
 
@@ -7,7 +7,7 @@ pub trait Subcomponent {
   fn pop(&mut self);
   fn clear(&mut self);
   fn set_cursor(&self, f: &mut Frame<'_>, rect: Rect, input: &str) {
-    let (x_offset, y_offset) = super::parse_coord(input); // Assuming parse_coord is available
+    let (x_offset, y_offset) = parse_coord(input);
     f.set_cursor(rect.x + x_offset, rect.y + y_offset);
   }
 
@@ -32,4 +32,11 @@ pub trait Subcomponent {
       false => Style::default().fg(Color::White),
     }
   }
+}
+
+pub(crate) fn parse_coord(text: &str) -> (u16, u16) {
+  let list: Vec<&str> = text.split("\n").collect();
+  let x_offset = list.last().unwrap().len() as u16 + 1;
+  let y_offset = list.len() as u16;
+  (x_offset, y_offset)
 }

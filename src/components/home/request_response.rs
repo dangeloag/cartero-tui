@@ -4,7 +4,6 @@ use std::{
 };
 
 use super::{subcomponent::Subcomponent, Component, Frame, MenuItem, ReqResponse};
-use crate::components::home::UserInput;
 use color_eyre::eyre::Result;
 use ratatui::{prelude::*, widgets::*};
 use serde::Serialize;

@@ -1,7 +1,4 @@
-use crate::{
-  components::home::UserInput,
-  repository::local_storage::{LocalStorageRepository, RequestInput},
-};
+use crate::repository::local_storage::{LocalStorageRepository, RequestInput};
 use color_eyre::eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{prelude::*, widgets::*};
@@ -83,10 +80,7 @@ fn render_reqs<'a>(user_reqs: &Vec<RequestInput>, style: Style) -> List<'a> {
     .collect();
 
   let list =
-    List::new(items).block(requests).highlight_style(Style::default()
-             .bg(Color::Yellow)
-            //.fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD));
+    List::new(items).block(requests).highlight_style(Style::default().bg(Color::Yellow).add_modifier(Modifier::BOLD));
 
   list
 }

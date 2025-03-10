@@ -1,11 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use crate::{components::home::UserInput, repository::local_storage::LocalStorageRepository};
+use crate::repository::local_storage::LocalStorageRepository;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{prelude::*, widgets::*};
 use tracing::info;
 
-use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
+use super::{
+  subcomponent::{parse_coord, Subcomponent},
+  Component, Frame, MenuItem,
+};
 use color_eyre::eyre::Result;
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +69,7 @@ impl Server {
 
 impl Subcomponent for Server {
   fn set_cursor(&self, f: &mut Frame<'_>, rect: Rect, input: &str) {
-    let (x_offset, y_offset) = super::parse_coord(input);
+    let (x_offset, y_offset) = parse_coord(input);
     f.set_cursor(rect.x + x_offset as u16 - 1, rect.y + y_offset as u16);
   }
 

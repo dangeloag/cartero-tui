@@ -149,7 +149,6 @@ impl Home {
       MenuItem::Headers => &mut self.headers,
       MenuItem::ServerListPopup => &mut self.server,
       MenuItem::JsonPath => &mut self.request_response,
-      // MenuItem::ParsingRulesPopup => &mut self.parsing_rules,
       _ => panic!("Not implemented"),
     }
   }
@@ -281,14 +280,6 @@ impl Component for Home {
         Mode::Normal => match key {
           KeyEvent { modifiers: _, code: KeyCode::Char('i'), kind: _, state: _ } => self.mode = Mode::Insert,
           KeyEvent { modifiers: _, code: KeyCode::Char('q'), kind: _, state: _ } => {
-            // TODO: figure out config stuff
-            // if let Some(config) = self.config {
-            //   if let Some(keymap) = config.keybindings.get(&self.mode) {
-            //     if let Some(action) = keymap.get(&vec![key.clone()]) {
-            //       return Ok(Some(action.clone()));
-            //     }
-            //   }
-            // }
             return Ok(Some(Action::Quit));
           },
           KeyEvent { modifiers: _, code: KeyCode::Char(c), kind: _, state: _ } => {
@@ -303,24 +294,6 @@ impl Component for Home {
         _ => {},
       },
     }
-
-    // match key {
-    //   KeyEvent { modifiers: _, code: KeyCode::Enter, kind: _, state: _ } => {
-    //     if self.user_input.active_menu_item == MenuItem::Server
-    //       || self.user_input.active_menu_item == MenuItem::Path
-    //       || self.user_input.active_menu_item == MenuItem::Requests
-    //     {
-    //       self.process_request();
-    //     } else {
-    //       self.get_active_widget().handle_key_events(key);
-    //     }
-    //   },
-    //   KeyEvent { modifiers: _, code: KeyCode::Char(c), kind: _, state: _ } => {
-    //     // self.user_input.get_active().push(c);
-    //     self.get_active_widget().handle_key_events(key);
-    //   },
-    //   _ => {},
-    // }
     Ok(Some(Action::Update))
   }
 
@@ -432,99 +405,9 @@ impl Component for Home {
 
     let _ = self.request_response.draw(f, request_chunk[2], footer, is_focused(self.active_widget, MenuItem::JsonPath));
 
-    //if self.popup {
-    //  let requests_list2 = render_popup(&vec![], &self.user_input);
-    //  let _ = Block::default().title("Popup").borders(Borders::ALL);
-    //  let area = centered_rect(60, 20, rect);
-    //  f.render_widget(Clear, area); //this clears out the background
-    //  f.render_stateful_widget(requests_list2, area, &mut self.server_list_state);
-    //  self.user_input.active_menu_item = MenuItem::ServerListPopup;
-    //}
-
-    //if self.parsing_rules_popup {
-    //  let _ = Block::default().title("Popup").borders(Borders::ALL);
-    //  let area = centered_rect(50, 30, rect);
-    //  let rules_text = Paragraph::new(AsRef::<str>::as_ref(&self.user_input.parsing_rules))
-    //    .style(Style::default().fg(Color::LightCyan))
-    //    .alignment(Alignment::Left)
-    //    .block(
-    //      Block::default()
-    //        .borders(Borders::ALL)
-    //        .style(focused_style(&self.user_input, MenuItem::ParsingRulesPopup))
-    //        .title("Parsing Rules")
-    //        .border_type(BorderType::Plain),
-    //    );
-    //  f.render_widget(Clear, area); //this clears out the background
-    //  f.render_widget(rules_text, area);
-    //  self.user_input.active_menu_item = MenuItem::ParsingRulesPopup;
-    //}
-
     Ok(())
   }
 }
-
-#[derive(Serialize, Deserialize, Clone)]
-struct UserInput {
-  method: server::HttpMethod,
-  server: String,
-  path: String,
-  query: String,
-  payload: String,
-  json_path: String,
-  headers: String,
-  parsing_rules: String,
-  active_menu_item: MenuItem,
-}
-
-//impl From<RequestInput> for UserInput {
-//  fn from(c_req: RequestInput) -> Self {
-//    UserInput {
-//      server: c_req.server,
-//      path: c_req.path,
-//      query: c_req.query,
-//      payload: c_req.payload,
-//      json_path: String::new(),
-//      headers: c_req.headers,
-//      parsing_rules: c_req.parsing_rules,
-//      method: c_req.method,
-//      active_menu_item: MenuItem::Server,
-//    }
-//  }
-//}
-
-//#[derive(Serialize, Deserialize, Clone)]
-//struct RequestInput {
-//  method: server::HttpMethod,
-//  server: String,
-//  path: String,
-//  query: String,
-//  payload: String,
-//  headers: String,
-//  #[serde(default = "emtpy_string")]
-//  parsing_rules: String,
-//}
-
-fn emtpy_string() -> String {
-  String::from("")
-}
-
-fn default_env() -> HashMap<String, String> {
-  HashMap::new()
-}
-
-//impl From<UserInput> for RequestInput {
-//  fn from(user_input: UserInput) -> Self {
-//    RequestInput {
-//      server: user_input.server,
-//      path: user_input.path,
-//      query: user_input.query,
-//      payload: user_input.payload,
-//      headers: user_input.headers,
-//      method: user_input.method,
-//      parsing_rules: user_input.parsing_rules,
-//    }
-//  }
-//}
 
 #[derive(Default, Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 enum MenuItem {
@@ -587,39 +470,8 @@ impl From<usize> for MenuItem {
   }
 }
 
-fn parse_rules(rules: &str) -> Vec<(String, String)> {
-  let rules_vec: Vec<&str> = rules.split('\n').collect();
-
-  let re = Regex::new(r"([a-zA-Z_.-]+)\s*->\s*(/.*)").unwrap();
-  let mut fields_vec: Vec<(String, String)> = vec![];
-
-  for rule in rules_vec {
-    if let Some(caps) = re.captures(rule).unwrap() {
-      let field_name = caps.get(1).unwrap().as_str();
-      let json_path = caps.get(2).unwrap().as_str();
-      fields_vec.push((field_name.to_owned(), json_path.to_owned()));
-    }
-  }
-  return fields_vec;
-}
-
 fn is_focused(active_item: MenuItem, item: MenuItem) -> bool {
   active_item == item
-}
-
-fn focused_style(user_input: &UserInput, item: MenuItem) -> Style {
-  if user_input.active_menu_item == item {
-    Style::default().fg(Color::Rgb(51, 255, 207))
-  } else {
-    Style::default().fg(Color::White)
-  }
-}
-
-fn parse_coord(text: &str) -> (u16, u16) {
-  let list: Vec<&str> = text.split("\n").collect();
-  let x_offset = list.last().unwrap().len() as u16 + 1;
-  let y_offset = list.len() as u16;
-  (x_offset, y_offset)
 }
 
 fn parse_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -652,59 +504,6 @@ fn replace_env_variables(input: &str, values: &HashMap<String, String>) -> Strin
   output
 }
 
-fn render_popup<'a>(servers: &Vec<String>, user_input: &UserInput) -> List<'a> {
-  let servers_block = Block::default()
-    .borders(Borders::ALL)
-    .style(focused_style(&user_input, MenuItem::ServerListPopup))
-    .title("Servers")
-    .border_type(BorderType::Plain);
-
-  // let url_socket = Regex::new(r"^https?://[^/]*").unwrap();
-  // let url_socket = Regex::new(r"^https?://.*?/").unwrap();
-  let items: Vec<_> = servers
-    .iter()
-    .map(|svr| {
-      // let parsed_owned_req_path = url_socket.replace(&req.path.clone(),"").clone().to_string();
-      ListItem::new(Line::from(vec![
-        Span::styled(svr.clone(), Style::default()),
-        // Span::styled(parsed_owned_req_path, Style::default(),)
-        // Span::styled(req.url.clone().replace(r"http://", ""), Style::default(),)
-      ]))
-    })
-    .collect();
-
-  let list = List::new(items).block(servers_block).highlight_style(
-    Style::default()
-            // .bg(Color::Yellow)
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-  );
-
-  list
-}
-
-//fn update_user_input(user_input: &mut UserInput, new_sel: &CRequest, servers: &Servers) {
-//  user_input.method = new_sel.method;
-//
-//  user_input.server.drain(..);
-//  user_input.server.push_str(servers.get_active());
-//
-//  user_input.path.drain(..);
-//  user_input.path.push_str(&new_sel.path[..]);
-//
-//  user_input.query.drain(..);
-//  user_input.query.push_str(&new_sel.query[..]);
-//
-//  user_input.payload.drain(..);
-//  user_input.payload.push_str(&new_sel.payload[..]);
-//
-//  user_input.headers.drain(..);
-//  user_input.headers.push_str(&new_sel.headers[..]);
-//
-//  user_input.parsing_rules.drain(..);
-//  user_input.parsing_rules.push_str(&new_sel.parsing_rules[..]);
-//}
-
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
   let popup_layout = Layout::default()
@@ -730,14 +529,4 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
       .as_ref(),
     )
     .split(popup_layout[1])[1]
-}
-
-fn is_editable(item: MenuItem) -> bool {
-  match item {
-    MenuItem::Query => true,
-    MenuItem::Payload => true,
-    MenuItem::Headers => true,
-    MenuItem::JsonPath => true,
-    _ => false,
-  }
 }

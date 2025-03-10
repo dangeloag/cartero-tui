@@ -1,8 +1,5 @@
 use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
-use crate::{
-  components::home::UserInput,
-  repository::local_storage::{self, LocalStorageRepository},
-};
+use crate::repository::local_storage::LocalStorageRepository;
 use color_eyre::eyre::Result;
 use ratatui::{prelude::*, widgets::*}; // Assuming UserInput is in crate root
 use std::sync::{Arc, Mutex};

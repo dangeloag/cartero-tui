@@ -1,4 +1,4 @@
-use super::{subcomponent::Subcomponent, Component, Frame, MenuItem, UserInput};
+use super::{subcomponent::Subcomponent, Component, Frame, MenuItem};
 use crate::repository::local_storage::LocalStorageRepository;
 use color_eyre::eyre::Result;
 use ratatui::{prelude::*, widgets::*};
